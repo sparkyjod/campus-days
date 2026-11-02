@@ -48,3 +48,36 @@ street life if the timetable alone cannot fill the frame.
   honestly recorded in PHASES.md as Partial; Phase 5 (Forward+) is the
   designated graphics milestone. This FAIL is about emptiness/readability in
   the current shots, not about photorealism.
+
+## Review 2 — Re-review after fix attempt 1 (commit 16c2ff2)
+Date: 2026-11-03 ~03:25 IST. All 10 re-captured screenshots (13:00 lunch) read.
+
+## Verdict: PASS
+
+- D1 FIXED: shot6 avenue now shows pedestrians + gate sign + parking cars;
+  shot7 shops has a 4+ person plaza crowd with Bhola; shot8 garden has seated
+  + standing students at the pond. (Minor, non-blocking: a bench sits
+  mid-avenue in shot6 — pre-existing layout; one label cut at shot7's edge;
+  lake sign partly overlapped by seated figures in shot8 but readable.)
+- D2 FIXED: shot4 menu board fully readable on both lines, 6+ diners, warm
+  interior lights, no more blow-out.
+- D3 FIXED within stylised limits: shot2 Anirudh close-up, face to camera,
+  enlarged eyes/brows/mouth clearly readable, hair off the face. Still
+  stylised low-poly — honestly recorded, Phase 5 is the milestone for more.
+- D4 FIXED: shot10 shows two sitters with thighs on the seat plank, knees
+  bent, feet on the ground — unambiguously sitting.
+- D5 FIXED: shot9 is a genuine mid-stride frame, legs split, arms swinging.
+  Root cause also fixed in code: Blender pose bones forced to XYZ Euler mode
+  (quaternion default had silently discarded all euler keyframes); walk now
+  15 tracks, and the freeze uses speed_scale = 0.
+- Tests re-run by the reviewer: exit 0, zero script/parse errors, 34/34
+  non-staff NPCs arrived, Day 1 → Day 2, 38 NPCs in world.
+- Scope check: diff 955e174 → 16c2ff2 touches only scripts/main.gd,
+  scripts/npc.gd, scripts/world.gd, tools/build_characters.py, the two GLBs,
+  preview PNGs, PHASES.md and this file. No Phase 2 systems. Capture
+  staging is gated behind the `--capture` argument only (_capture_mode);
+  normal gameplay is unaffected.
+- Still open, owned by Stage 3 (not defects): build/windows/ does not exist
+  yet; no git remote configured. Stage 3 must export Windows, force-add
+  build/web/ + build/windows/ past the build/ gitignore, run --import before
+  exporting (GLBs changed), and verify the pushed files by reading the repo back.
