@@ -88,7 +88,7 @@ func _ready() -> void:
 		_test_start_ms = Time.get_ticks_msec()
 		print("[TEST] Campus Days headless test started. Mains: ", _mains.size(), " BG: ", _bgs.size(), " Staff: ", _staff.size())
 	elif _capture_mode:
-		game_minutes = 630.0
+		game_minutes = 780.0 # FIX 2026-11-03 (D1/D2): capture at 13:00 lunch, not 10:30 lectures
 		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://preview"))
 		_run_captures()
 	else:
@@ -110,7 +110,7 @@ func _build_environment() -> void:
 	_env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	_env.ambient_light_energy = 0.55
 	_env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	_env.background_energy_multiplier = 1.05
+	_env.background_energy_multiplier = 0.95 # FIX 2026-11-03 (D1/D2): was blowing out white paving/plaza at midday
 	_env.ambient_light_sky_contribution = 0.75
 	# GTA-style colour grade + distance haze (Compatibility-safe: no glow)
 	_env.adjustment_enabled = true
@@ -352,7 +352,7 @@ func _process(delta: float) -> void:
 	_player.speed_factor = 0.55 if energy <= 5.0 else 1.0
 	if _chat_cooldown > 0.0:
 		_chat_cooldown -= delta
-	else:
+	elif not _capture_mode: # capture tour stages poses; small talk would override them
 		_chat_cooldown = _rng.randf_range(6.0, 11.0)
 		_npc_small_talk()
 	if _toast_timer > 0.0:
@@ -393,9 +393,9 @@ func _update_sun() -> void:
 	var sun_ang := lerpf(-0.15, -PI + 0.15, day_frac)
 	_sun.rotation = Vector3(-elev * 1.1 - 0.05, sun_ang * 0.4, 0)
 	var is_day := hour > 6.2 and hour < 18.8
-	_sun.light_energy = clampf(elev * 1.5, 0.03, 1.25) if is_day else 0.05
+	_sun.light_energy = clampf(elev * 1.5, 0.03, 1.12) if is_day else 0.05
 	_sun.light_color = Color(1.0, lerpf(0.75, 0.98, elev), lerpf(0.55, 0.92, elev))
-	_env.ambient_light_energy = lerpf(0.15, 0.52, clampf(elev + 0.25, 0.0, 1.0))
+	_env.ambient_light_energy = lerpf(0.15, 0.48, clampf(elev + 0.25, 0.0, 1.0))
 	_sky_mat.sky_top_color = Color(0.10, 0.16, 0.35).lerp(Color(0.25, 0.5, 0.86), clampf(elev * 1.6, 0.0, 1.0))
 	_sky_mat.sky_horizon_color = Color(0.25, 0.25, 0.35).lerp(Color(0.78, 0.86, 0.95), clampf(elev * 1.6 + 0.15, 0.0, 1.0))
 	var lamp_on := 1.3 if (hour < 6.6 or hour > 18.2) else 0.0
@@ -756,6 +756,21 @@ func _refresh_classmates() -> void:
 
 # ---------------- screenshots (capture mode) ----------------
 
+# Capture-only staging (FIX 2026-11-03, defects D1-D5). The game itself is
+# unchanged: these NPCs are teleported + held still ONLY for screenshots, so
+# the frames show lunch-hour street life instead of the 10:30 lecture exodus.
+# _stage() also sets spot/target to the lunch zone so _update_schedules does
+# not re-path a staged NPC mid-tour.
+func _stage(npc: NPC, pos: Vector3, yaw: float, sit: bool = false) -> void:
+	npc.stationary = true
+	npc.set_path([])
+	npc.global_position = pos
+	npc.spot = pos
+	npc.target_zone = "foodcourt" # 13:00 segment for everyone; keeps schedules quiet
+	npc.seated = sit
+	npc.seat_yaw = yaw
+	npc.rotation.y = yaw
+
 func _run_captures() -> void:
 	# A free camera tours fixed viewpoints; saves PNGs into res://preview/
 	var cam := Camera3D.new()
@@ -763,21 +778,58 @@ func _run_captures() -> void:
 	add_child(cam)
 	cam.current = true
 	_player.visible = true
+	# Park the player far outside every frame: after the dialogue shot the
+	# player used to stay next to Jatin and photobomb later shots (the big
+	# yellow block in the old shot7) and trigger the "[E] Talk to" prompt.
+	_player.global_position = Vector3(-130, 0, 100)
+	# --- stage all street life up front (before anyone walks off to lunch) ---
+	# D3 close-up: Anirudh alone on open quad lawn (old spot sat on top of
+	# the chai-stall staff, who filled the foreground).
+	_stage(_mains[0], Vector3(-16, 0, 8), 0.0)
+	# D2 food-court diners at the tables + counter queue (kept clear of the
+	# menu-board sightline so no name label lands on the menu text).
+	_stage(_bgs[0], Vector3(62, 0, 15.5), PI / 2.0)
+	_stage(_bgs[1], Vector3(63, 0, 22), -PI / 2.0)
+	_stage(_bgs[4], Vector3(68, 0, 13.5), PI / 2.0)
+	_stage(_bgs[5], Vector3(71, 0, 21), 0.0)
+	_stage(_bgs[6], Vector3(70, 0, 20), 0.8)
+	# D1 avenue crowd: people on the avenue itself, near and far so the gate
+	# vehicles read behind them, facing the gate/camera.
+	_stage(_bgs[7], Vector3(-2, 0, 45), 0.0)
+	_stage(_bgs[8], Vector3(2, 0, 52), 0.0)
+	_stage(_bgs[9], Vector3(-1.5, 0, 70), 0.3)
+	_stage(_bgs[10], Vector3(3, 0, 38), -0.3)
+	_stage(_bgs[11], Vector3(-3.5, 0, 80), 0.5)
+	# D1 shops crowd in the plaza, facing the shop fronts (east).
+	_stage(_bgs[12], Vector3(19, 0, 76), PI / 2.0)
+	_stage(_bgs[13], Vector3(20, 0, 88), PI / 2.0)
+	_stage(_bgs[14], Vector3(17, 0, 84), PI / 2.0)
+	_stage(_bgs[15], Vector3(22, 0, 92), PI / 2.0)
+	# D1 garden life: two seated on the pond bench + three standing by the pond.
+	var gseats: Array = _world["seats"]["garden"]
+	_stage(_bgs[16], gseats[0]["pos"], gseats[0]["yaw"], true)
+	_stage(_bgs[17], gseats[1]["pos"], gseats[1]["yaw"], true)
+	# Garden standers kept OFF the pond (the old (114,34) spot was inside it)
+	# and on the camera's side of the pond bench.
+	_stage(_bgs[18], Vector3(112, 0, 33), -1.17)
+	_stage(_bgs[19], Vector3(122, 0, 38), -2.55)
+	_stage(_bgs[20], Vector3(124, 0, 28), -0.98)
 	await get_tree().create_timer(1.2).timeout
 	_shot(cam, Vector3(30, 24, 92), Vector3(0, 3, -30))
 	await get_tree().create_timer(0.9).timeout
 	await _shot_file("shot1_campus_wide.png")
-	# character close-up: Anirudh posed on the quad lawn (deterministic —
-	# free-roaming NPCs rotate away while walking to their timetable zone)
+	# D3 character close-up: camera ~1.2 m from the face, face turned to the
+	# camera (yaw = direction to camera, same convention as walk facing),
+	# name label hidden for this frame so it cannot dwarf the face.
 	var ani: NPC = _mains[0]
-	ani.stationary = true
-	ani.set_path([])
-	ani.global_position = Vector3(14, 0, 22)
-	ani.rotation.y = 0.6
 	var ap := ani.global_position
-	_shot(cam, ap + Vector3(1.45, 1.52, 1.95), ap + Vector3(0, 1.28, 0))
+	var cam2 := ap + Vector3(0.7, 1.52, 0.95)
+	ani.rotation.y = atan2(cam2.x - ap.x, cam2.z - ap.z)
+	ani._label.visible = false
+	_shot(cam, cam2, ap + Vector3(0, 1.52, 0))
 	await get_tree().create_timer(0.9).timeout
 	await _shot_file("shot2_character_closeup.png")
+	ani._label.visible = true
 	# dialogue: teleport player next to Jatin and open the panel
 	var jatin: NPC = _mains[4]
 	_player.global_position = jatin.global_position + Vector3(1.4, 0.1, 1.4)
@@ -787,58 +839,85 @@ func _run_captures() -> void:
 	await get_tree().create_timer(0.9).timeout
 	await _shot_file("shot3_dialogue.png")
 	_close_dialogue()
-	# food court interior
-	_shot(cam, Vector3(58, 2.3, 25), Vector3(77, 1.4, 18))
+	_player.global_position = Vector3(-130, 0, 100)
+	# D2 food court interior: straight down the hall to counter + menu board,
+	# diners staged at the tables in frame. A lunch-spot main (Chirag) stands
+	# in the menu sightline, so ALL name labels are hidden for this frame
+	# only — otherwise one always lands on the menu text.
+	for n in _all_npcs:
+		(n as NPC)._label.visible = false
+	_shot(cam, Vector3(56, 1.7, 18), Vector3(79, 2.5, 18))
 	await get_tree().create_timer(0.9).timeout
 	await _shot_file("shot4_foodcourt.png")
+	for n in _all_npcs:
+		(n as NPC)._label.visible = true
 	# library facade + quad
 	_shot(cam, Vector3(28, 7, -18), Vector3(58, 5, -56))
 	await get_tree().create_timer(0.9).timeout
 	await _shot_file("shot5_library_quad.png")
-	# street level on the main avenue (GTA-style street scene)
-	_shot(cam, Vector3(3.4, 1.7, 80), Vector3(-1.5, 1.9, 40))
+	# D1 street level on the main avenue, looking SOUTH to the gate: bus,
+	# auto-rickshaw, scooters, parking, shops row and staged avenue crowd
+	# all in frame; no empty lawn in the foreground.
+	_shot(cam, Vector3(0, 1.7, 28), Vector3(1, 1.5, 95))
 	await get_tree().create_timer(0.9).timeout
 	await _shot_file("shot6_avenue.png")
-	# shops row
-	_shot(cam, Vector3(12.0, 1.9, 90), Vector3(25, 1.2, 84))
+	# D1 shops row: camera east of the auto-rickshaw (the old (10,88) spot
+	# sat 2 m from it, so the rickshaw filled the left foreground).
+	_shot(cam, Vector3(14, 1.8, 92), Vector3(26, 1.3, 80))
 	await get_tree().create_timer(0.9).timeout
 	await _shot_file("shot7_shops.png")
-	# gardens + pond
-	_shot(cam, Vector3(92, 3.4, 58), Vector3(117, 0.6, 33))
+	# D1 gardens + pond: low camera from the south path toward the pond
+	# bench and pond (the old west camera sat inside a tree canopy);
+	# sitter labels hidden so they cannot overlap each other.
+	_bgs[16]._label.visible = false
+	_bgs[17]._label.visible = false
+	_shot(cam, Vector3(105, 1.7, 36), Vector3(117, 1.0, 30))
 	await get_tree().create_timer(0.9).timeout
 	await _shot_file("shot8_garden.png")
-	# mid-walk-cycle: send a background student across the frame
+	_bgs[16]._label.visible = true
+	_bgs[17]._label.visible = true
+	# D5 mid-walk-cycle: freeze a genuine mid-stride frame. The old code's
+	# seek+pause was undone every frame by NPC._update_anim (stationary ->
+	# idle); anim_frozen now holds the pose. Frame 1 of the walk clip is a
+	# full leg split (-32/+28 deg).
 	var walker: NPC = _bgs[2]
-	walker.stationary = true
-	walker.set_path([])
-	walker.global_position = Vector3(2.5, 0, 34)
-	walker.rotation.y = -PI / 2.0 # side-on to camera
+	_stage(walker, Vector3(2.5, 0, 34), -PI / 2.0) # side-on to camera
+	walker.anim_frozen = true
 	await get_tree().create_timer(0.3).timeout
-	# freeze the walk cycle mid-stride (legs split) as animation proof
 	var wanim: AnimationPlayer = walker._anim
 	if wanim != null and wanim.has_animation("walk"):
+		# Freeze with speed_scale 0, NOT pause(): in this Godot build pause()
+		# clears current_animation and the pose reverts to rest (straight
+		# legs) — that was the second half of the old shot9 failure.
 		wanim.play("walk")
-		wanim.seek(0.05, true)
-		wanim.pause()
+		wanim.seek(0.0, true)
+		wanim.speed_scale = 0.0
+		print("[CAPTURE] walker anim=", wanim.current_animation, " pos=", wanim.current_animation_position)
 	var wp := walker.global_position
-	_shot(cam, wp + Vector3(0.3, 1.32, 3.6), wp + Vector3(0, 0.95, 0))
+	_shot(cam, wp + Vector3(0.3, 1.1, 2.8), wp + Vector3(0, 0.9, 0))
 	await get_tree().create_timer(0.5).timeout
 	await _shot_file("shot9_walk_cycle.png")
-	# seated on a quad bench
+	# D4 seated on a quad bench: LOW front-side camera at seat height so the
+	# bent legs, seat plank and backrest relationship read unambiguously
+	# (the old high camera made a sitter read as standing behind the bench).
 	var sitter: NPC = _bgs[3]
 	var seat0: Dictionary = (_world["seats"]["quad"] as Array)[0]
-	sitter.target_zone = _segment_for(sitter.data, game_minutes / 60.0)
-	sitter.global_position = seat0["pos"]
-	sitter.spot = seat0["pos"]
-	sitter.set_path([])
-	sitter.seated = true
-	sitter.seat_yaw = seat0["yaw"]
-	sitter.rotation.y = seat0["yaw"]
+	_stage(sitter, seat0["pos"], seat0["yaw"], true)
+	var seat1: Dictionary = (_world["seats"]["quad"] as Array)[1]
+	_stage(_bgs[22], seat1["pos"], seat1["yaw"], true)
+	sitter._label.visible = false
+	_bgs[22]._label.visible = false
 	await get_tree().create_timer(0.6).timeout
 	var sp2 := sitter.global_position
-	_shot(cam, sp2 + Vector3(1.8, 1.35, 2.2), sp2 + Vector3(0, 0.85, 0))
+	var fwd := Vector3(sin(seat0["yaw"]), 0, cos(seat0["yaw"]))
+	var side := Vector3(cos(seat0["yaw"]), 0, -sin(seat0["yaw"]))
+	# 3/4 side view (more side offset than before) so the horizontal thighs
+	# read instead of foreshortening into vertical bars from dead front.
+	_shot(cam, sp2 + fwd * 2.2 + side * 2.0 + Vector3(0, 0.9, 0), sp2 + Vector3(0, 0.65, 0))
 	await get_tree().create_timer(0.5).timeout
 	await _shot_file("shot10_seated.png")
+	sitter._label.visible = true
+	_bgs[22]._label.visible = true
 	print("[CAPTURE] done")
 	get_tree().quit(0)
 

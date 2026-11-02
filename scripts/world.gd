@@ -661,8 +661,18 @@ static func _build_interiors() -> void:
 	# Food Court: counter along east wall + tables + menu board
 	_box(TexGen.mat_color(Color(0.85, 0.5, 0.15), 0.6), Vector3(77.5, 0.55, 18), Vector3(3.4, 1.1, 11), true)
 	_box(TexGen.mat_tex(TexGen.tex_marble(), Color.WHITE, Vector2(3, 1)), Vector3(77.5, 1.16, 18), Vector3(3.6, 0.1, 11.4), false)
-	_box(dark_m, Vector3(79.6, 2.9, 18), Vector3(0.15, 1.9, 9.5), false)
-	_sign("MENU — Thali ₹60 • Biryani ₹140 • Masala Dosa ₹80\nSamosa (2 pc) ₹20 • Cutlet ₹30 • Cold Drink ₹25", Vector3(79.5, 3.0, 18), 58, Color(1.0, 0.95, 0.8), -PI / 2.0)
+	# FIX 2026-11-03 (D2): bigger board, label 0.075 m clear of its face, shorter
+	# lines + smaller font so nothing clips or overlaps at the counter camera.
+	_box(dark_m, Vector3(79.6, 3.0, 18), Vector3(0.15, 2.6, 12.0), false)
+	_sign("MENU — Thali ₹60 • Biryani ₹140 • Dosa ₹80\nSamosa ₹20 • Cutlet ₹30 • Cold Drink ₹25", Vector3(79.45, 3.0, 18), 48, Color(1.0, 0.95, 0.8), -PI / 2.0)
+	# FIX 2026-11-03 (D2): warm interior lights so the hall is not flat ambient only.
+	for lp in [Vector3(62, 4.5, 18), Vector3(73, 4.5, 18)]:
+		var omni := OmniLight3D.new()
+		omni.position = lp
+		omni.omni_range = 20.0
+		omni.light_energy = 0.55
+		omni.light_color = Color(1.0, 0.9, 0.7)
+		_parent.add_child(omni)
 	for tx in [58.0, 64.0, 70.0]:
 		for tz in [12.5, 23.5]:
 			_cyl(TexGen.mat_color(Color(0.9, 0.88, 0.85), 0.4), Vector3(tx, 0.78, tz), 0.95, 0.08, false)
@@ -935,7 +945,8 @@ static func _build_gardens(seats: Dictionary) -> void:
 	water.height = 0.05
 	water.radial_segments = 24
 	_mi(water, TexGen.mat_tex(TexGen.tex_water(), Color(0.8, 0.92, 1.0), Vector2(4, 4), 0.3), Vector3(118, 0.235, 32), Vector3.ONE)
-	_sign("THE LAKE CORNER", Vector3(112, 1.6, 26.5), 56, Color(1, 1, 1), PI * 0.85)
+	# FIX 2026-11-03: sign faced north (mirrored from the garden path); face it south to the path.
+	_sign("THE LAKE CORNER", Vector3(112, 1.6, 26.5), 56, Color(1, 1, 1), 0.0)
 	# flower beds + bushes + trees
 	var flower_m := TexGen.mat_tex(TexGen.tex_flowers(), Color.WHITE, Vector2(3, 1))
 	var edging_m := TexGen.mat_tex(TexGen.tex_concrete(), Color(0.9, 0.88, 0.84), Vector2(3, 0.3))

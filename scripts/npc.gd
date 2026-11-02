@@ -28,6 +28,10 @@ var path_idx: int = 0
 var speed: float = 1.45
 var talking: bool = false
 var seated: bool = false
+# Capture-only: when true, _process skips movement and animation updates so
+# a frozen mid-stride pose set by the screenshot tour is not overridden by
+# the idle clip (the cause of the old shot9 straight-leg frame).
+var anim_frozen: bool = false
 var seat_yaw: float = 0.0
 var rng := RandomNumberGenerator.new()
 
@@ -118,6 +122,8 @@ func _process(delta: float) -> void:
 		if _bubble_timer <= 0.0:
 			_bubble.visible = false
 	_moving = false
+	if anim_frozen:
+		return
 	if talking or stationary:
 		_update_anim()
 		return

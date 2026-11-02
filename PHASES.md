@@ -75,6 +75,65 @@ chai stall, cricket pitch + football, auto-rickshaw & bus, Indian names and dial
   their scheduled zones, day rolled over to Day 2, **zero script errors**.
   Dialogue verified visually (Jatin panel capture, preview/shot3_dialogue.png).
 
+---
+
+## Fix round — AI review defects D1–D5, fix attempt 1 (2026-11-03)
+
+AI Review 1 FAILED the overhaul on the morning-reveal visual bar only
+(systems/tests passed). Fix attempt 1 addressed all five defects; no Phase 2
+systems were started. All captures moved from 10:30 (lectures, empty outdoors)
+to **13:00 lunch**, and the capture tour now *stages* street life (capture-only
+teleports in `scripts/main.gd:_run_captures` — gameplay is unchanged).
+
+- ✅ D1 Street-level emptiness: avenue shot re-framed looking south to the
+  gate (bus, auto-rickshaw, scooters, parking, shops row in frame) with 5
+  staged avenue pedestrians; shops shot re-framed east of the rickshaw (the
+  old camera sat 2 m from it and the rickshaw filled the frame) with a 4-person
+  plaza crowd + Bhola; garden shot re-framed from the south path to the pond
+  bench (2 seated + 3 standing, pond, readable "THE LAKE CORNER" sign — the
+  sign previously faced north and read mirrored, now faces the path).
+  Sun/ambient/background energy trimmed slightly (1.25→1.12, 0.52→0.48,
+  1.05→0.95) to stop white paving blowing out.
+- ✅ D2 Food court: camera straight down the hall to the counter; menu board
+  enlarged (2.6 m tall, 12 m wide), label moved clear of its face, lines
+  shortened and font reduced so both lines read in full; 5 staged diners +
+  lunch-spot mains at the tables/counter; two warm interior lights added
+  (flat ambient was the only interior light before). Name labels hidden for
+  this frame only so none lands on the menu text.
+- ✅ D3 Close-up: Anirudh moved to open quad lawn (the old spot sat on top of
+  the chai-stall staff, who filled the foreground), camera ~1.2 m from the
+  face, face turned to the camera, label hidden for the frame. Eyes enlarged
+  ~55% in the Blender build (0.0135→0.021) with stronger brows/mouth. Eyes,
+  brows and mouth are now clearly readable — **but the look remains stylised
+  low-poly, not photoreal**; that honesty stands (Forward+ pass is Phase 5).
+- ✅ D4 Seated: ROOT CAUSE FIXED, not just re-framed — see animation note
+  below. Re-captured from a low 3/4 side view: two sitters, thighs on the
+  seat plank, knees bent, feet on the ground in front of the bench.
+- ✅ D5 Walk cycle: ROOT CAUSE FIXED — see animation note. Re-captured as a
+  genuine mid-stride frame (legs split, arms swinging, knees bent).
+- ⚠️ Animation root cause (found in this round, affected the whole game):
+  Blender pose bones default to QUATERNION rotation mode, but the character
+  builder set `rotation_euler` — silently ignored, so every clip exported as
+  identity except the Hips bob (straight legs, no sit drop, no arm swing).
+  Fixed in `tools/build_characters.py:key_pose` (force XYZ Euler mode) and
+  both GLBs rebuilt; Godot import verified: walk now has 15 tracks with
+  25–28 keys per leg/arm track (was 3 tracks). NOTE for future GLB rebuilds:
+  run `--import` explicitly after replacing a GLB — a stale `.godot/imported`
+  scene can otherwise keep serving the old clips.
+- ✅ Capture hygiene fixed along the way: the player is parked outside every
+  frame (it used to photobomb later shots and trigger the "[E] Talk to"
+  prompt); small-talk bubbles are suppressed in capture mode so staged poses
+  are not overridden; the walk freeze uses `speed_scale = 0`, not `pause()`
+  (in this Godot build `pause()` clears `current_animation` and the pose
+  reverts to rest); a garden stander that had been placed inside the pond
+  was moved onto the bank.
+- Acceptance (this round): headless full-day sim re-run — exit 0, **zero
+  script/parse errors** (565 `Parameter "m" is null` lines are the known
+  dummy-renderer engine notices), **34/34 non-staff NPCs arrived**, day
+  rolled over; all 10 preview shots re-captured at 13:00 and read back by
+  the fixer (D1–D5 confirmed in the images, not just in code); web export
+  refreshed (41 MB). build/windows/ is still Stage 3's export job.
+
 ## Phase 2 — Stats & Academics ⏳ (not started — awaiting user review)
 
 - ⏳ Stats engine full set: GPA/Academics, Health, Stress, Social/Reputation + Skills

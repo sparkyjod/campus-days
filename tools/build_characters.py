@@ -205,11 +205,13 @@ def build_body(arm, mats, female):
     bpy.ops.object.join()
     finish_part(skull, "Head", "Head", S, arm)
     # eyes (joined), brows (joined), mouth
+    # FIX 2026-11-03 (D3): eyes enlarged ~55% so they read at street-level
+    # camera distance instead of tiny dots; brows/mouth strengthened to match.
     eyes = []
     for sx in (1, -1):
-        bpy.ops.mesh.primitive_uv_sphere_add(segments=10, ring_count=8, radius=1.0, location=(0.040 * sx, -0.104, 1.683))
+        bpy.ops.mesh.primitive_uv_sphere_add(segments=10, ring_count=8, radius=1.0, location=(0.040 * sx, -0.106, 1.683))
         e = bpy.context.active_object
-        e.scale = (0.0135, 0.008, 0.016)
+        e.scale = (0.021, 0.010, 0.025)
         bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
         bpy.ops.object.shade_smooth()
         eyes.append(e)
@@ -220,14 +222,14 @@ def build_body(arm, mats, female):
     finish_part(eyes[0], "Eyes", "Head", mats["Eye"], arm)
     brows = []
     for sx in (1, -1):
-        b = rbox("tmp", (0.042 * sx, -0.099, 1.713), (0.046, 0.010, 0.011), 0.004, None, None, arm)
+        b = rbox("tmp", (0.042 * sx, -0.099, 1.713), (0.056, 0.010, 0.015), 0.004, None, None, arm)
         brows.append(b)
     for o in brows:
         o.select_set(True)
     bpy.context.view_layer.objects.active = brows[0]
     bpy.ops.object.join()
     finish_part(brows[0], "Brows", "Head", H, arm)
-    rbox("Mouth", (0, -0.104, 1.602), (0.038, 0.006, 0.009), 0.003, mats["Lip"], "Head", arm)
+    rbox("Mouth", (0, -0.104, 1.602), (0.046, 0.006, 0.011), 0.003, mats["Lip"], "Head", arm)
     # arms
     for side, sx in (("L", 1), ("R", -1)):
         limb("UpperArm." + side, (0.215 * sx, 0, 1.44), (0.24 * sx, 0, 1.19), arm_r, T, "UpperArm." + side, arm)
@@ -334,6 +336,12 @@ def key_pose(arm, frame, rot=None, hips_loc=None):
     rot = rot or {}
     bpy.context.scene.frame_set(frame)
     for pb in arm.pose.bones:
+        # FIX 2026-11-03 (D4/D5 root cause): Blender pose bones default to
+        # QUATERNION rotation mode, so setting rotation_euler was silently
+        # ignored and every clip exported as identity (straight legs, no sit
+        # drop, no arm swing — only the Hips location bob survived). Force
+        # XYZ Euler mode so the euler keyframes actually drive the pose.
+        pb.rotation_mode = 'XYZ'
         pb.rotation_euler = (0.0, 0.0, 0.0)
         pb.location = (0.0, 0.0, 0.0)
     for name, r in rot.items():
