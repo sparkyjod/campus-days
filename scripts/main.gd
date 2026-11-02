@@ -8,7 +8,9 @@ extends Node3D
 const ZONE_NAMES := {
 	"dorm": "Residence Hall", "lecture": "Lecture Block A", "library": "Central Library",
 	"foodcourt": "Food Court", "quad": "Central Quad", "union": "Student Union",
-	"sports": "Sports Complex", "gate": "Main Gate"
+	"sports": "Sports Complex", "gate": "Main Gate",
+	"lectureb": "Lecture Block B", "lecturec": "Lecture Block C",
+	"admin": "Admin Block", "shops": "Campus Shops", "garden": "Gardens & Amphitheatre"
 }
 
 var _world: Dictionary = {}
@@ -108,25 +110,82 @@ func _build_environment() -> void:
 	_env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	_env.ambient_light_energy = 0.55
 	_env.tonemap_mode = Environment.TONE_MAPPER_ACES
+	_env.background_energy_multiplier = 1.05
+	_env.ambient_light_sky_contribution = 0.75
+	# GTA-style colour grade + distance haze (Compatibility-safe: no glow)
+	_env.adjustment_enabled = true
+	_env.adjustment_brightness = 1.0
+	_env.adjustment_contrast = 1.09
+	_env.adjustment_saturation = 1.14
+	_env.fog_enabled = true
+	_env.fog_light_color = Color(0.79, 0.84, 0.91)
+	_env.fog_light_energy = 0.55
+	_env.fog_density = 0.0022
 	we.environment = _env
 	add_child(we)
 	_sun = DirectionalLight3D.new()
 	_sun.shadow_enabled = true
 	_sun.light_energy = 1.1
+	_sun.shadow_blur = 1.6
 	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-	_sun.directional_shadow_max_distance = 260.0
+	_sun.directional_shadow_max_distance = 300.0
 	add_child(_sun)
+	# soft sky-bounce fill from the opposite side (no shadows)
+	var fill := DirectionalLight3D.new()
+	fill.rotation = Vector3(-0.9, 2.4, 0)
+	fill.light_energy = 0.22
+	fill.light_color = Color(0.75, 0.84, 1.0)
+	fill.shadow_enabled = false
+	add_child(fill)
+	_build_clouds()
+
+func _build_clouds() -> void:
+	# soft billboard-free cloud blobs: flattened sphere clusters, high up
+	var cloud_m := StandardMaterial3D.new()
+	cloud_m.albedo_color = Color(0.97, 0.98, 1.0, 0.88)
+	cloud_m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	cloud_m.roughness = 1.0
+	cloud_m.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	var sm := SphereMesh.new()
+	sm.radius = 0.5
+	sm.height = 1.0
+	sm.radial_segments = 12
+	sm.rings = 6
+	var clusters := [Vector3(-70, 62, -60), Vector3(40, 68, -30), Vector3(95, 60, 40), Vector3(-110, 66, 30), Vector3(0, 72, 80), Vector3(-30, 58, -110), Vector3(120, 64, -90)]
+	var ci := 0
+	for c in clusters:
+		for k in range(3):
+			var mi := MeshInstance3D.new()
+			mi.mesh = sm
+			mi.material_override = cloud_m
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			var off := Vector3(float((ci * 7 + k * 13) % 17) - 8.0, float(k % 2) * 1.5, float((ci * 5 + k * 7) % 11) - 5.0)
+			mi.position = c + off
+			mi.scale = Vector3(15.0 + float(k * 4), 4.4, 9.0 + float(k * 2))
+			add_child(mi)
+		ci += 1
 
 func _spawn_player() -> void:
 	_player = Player.new()
 	_player.position = Vector3(0, 0.1, 84)
 	add_child(_player)
 
+func _pick_spot(npc: NPC, zone: String, idx: int) -> Vector3:
+	var spots: Array = _zone_spots[zone]
+	var spot: Vector3 = spots[idx % spots.size()]
+	npc.seated = false
+	var seat_list: Array = (_world.get("seats", {}) as Dictionary).get(zone, [])
+	for st in seat_list:
+		if (st["pos"] as Vector3).distance_to(spot) < 0.05:
+			npc.seated = true
+			npc.seat_yaw = st["yaw"]
+			break
+	return spot
+
 func _npc_common(data: Dictionary, is_main_flag: bool, zone: String, idx: int) -> NPC:
 	var npc := NPC.new()
 	add_child(npc)
-	var spots: Array = _zone_spots[zone]
-	var start: Vector3 = spots[idx % spots.size()]
+	var start: Vector3 = _pick_spot(npc, zone, idx)
 	npc.setup(data, is_main_flag, start, _rng.randf_range(1.35, 1.6))
 	npc.current_zone = zone
 	npc.target_zone = zone
@@ -151,9 +210,12 @@ func _spawn_people() -> void:
 		{"morning": "dorm", "am1": "lecture", "am2": "library", "pm": "lecture", "club": "quad", "evening": "quad", "night": "dorm"},
 		{"morning": "foodcourt", "am1": "lecture", "am2": "lecture", "pm": "library", "club": "union", "evening": "foodcourt", "night": "library"},
 		{"morning": "dorm", "am1": "library", "am2": "lecture", "pm": "quad", "club": "sports", "evening": "sports", "night": "dorm"},
-		{"morning": "quad", "am1": "lecture", "am2": "library", "pm": "library", "club": "library", "evening": "quad", "night": "dorm"}
+		{"morning": "quad", "am1": "lecture", "am2": "library", "pm": "library", "club": "library", "evening": "quad", "night": "dorm"},
+		{"morning": "dorm", "am1": "lectureb", "am2": "library", "pm": "lecturec", "club": "garden", "evening": "shops", "night": "dorm"},
+		{"morning": "foodcourt", "am1": "lecturec", "am2": "lectureb", "pm": "library", "club": "sports", "evening": "garden", "night": "library"}
 	]
-	for i in range(16):
+	var female_names := {"Priya": true, "Sneha": true, "Kavya": true, "Meera": true, "Ishita": true, "Pooja": true, "Ananya": true, "Nisha": true, "Tanya": true, "Riya": true, "Gauri": true, "Jyoti": true, "Lakshmi": true, "Neha": true}
+	for i in range(24):
 		var tpl: Dictionary = templates[i % templates.size()]
 		var d := {
 			"name": names[i], "major": "Student", "year": 1 + (i % 4),
@@ -161,6 +223,8 @@ func _spawn_people() -> void:
 			"skin": skin_cols[i % skin_cols.size()],
 			"hair_style": i % 8, "hair_color": Color(0.08, 0.06, 0.05),
 			"shirt": shirt_cols[i % shirt_cols.size()], "pants": Color(0.22, 0.23, 0.3),
+			"female": female_names.has(names[i]),
+			"pattern": "stripe" if i % 5 == 3 else ("check" if i % 7 == 4 else ""),
 			"backpack": i % 3 == 0, "pack_color": shirt_cols[(i + 3) % shirt_cols.size()],
 			"morning": tpl["morning"], "am1": tpl["am1"], "am2": tpl["am2"], "pm": tpl["pm"],
 			"club": tpl["club"], "evening": tpl["evening"], "night": tpl["night"],
@@ -171,18 +235,21 @@ func _spawn_people() -> void:
 		_bgs.append(npc)
 	# Staff (stationary, role greetings)
 	var staff_defs := [
-		{"name": "Mrs. Iyer (Librarian)", "pos": _world["librarian_pos"], "zone": "library",
+		{"name": "Mrs. Iyer (Librarian)", "pos": _world["librarian_pos"], "zone": "library", "female": true,
 			"line": "Shhh — welcome to the Central Library, beta. Reading hall rules: mobiles on silent, books back by 8 PM. Shreya practically lives here, you'll find her by the medical shelves."},
 		{"name": "Mr. Khan (Food Court)", "pos": _world["canteen_staff_pos"], "zone": "foodcourt",
 			"line": "Welcome, welcome! Lunch counter opens 1 to 2 — thali is only ₹60 for students, full ghee tadka. Come hungry, leave happy, that's our policy."},
 		{"name": "Ramesh (Chai Stall)", "pos": _world["chai_staff_pos"], "zone": "quad",
-			"line": "Chai, bhaiya/didi? Kadak masala, ₹15 only. Twenty years I've run this stall — half the professors did their PhD on my chai, I'm telling you."}
+			"line": "Chai, bhaiya/didi? Kadak masala, ₹15 only. Twenty years I've run this stall — half the professors did their PhD on my chai, I'm telling you."},
+		{"name": "Bhola (Shops)", "pos": _world["shop_staff_pos"], "zone": "shops",
+			"line": "Welcome to the campus shops lane! Xerox at ₹1 a page, juice fresh, books at student discount. Exam week, this whole lane stays open till midnight."}
 	]
 	for sd in staff_defs:
 		var d := {
 			"name": sd["name"], "major": "Staff", "year": 0,
 			"height": 1.70, "build": 1.0, "skin": Color(0.60, 0.43, 0.30),
 			"hair_style": 7, "hair_color": Color(0.2, 0.18, 0.16),
+			"female": sd.get("female", false),
 			"shirt": Color(0.88, 0.86, 0.82), "pants": Color(0.3, 0.28, 0.26),
 			"greeting": sd["line"]
 		}
@@ -255,9 +322,8 @@ func _update_schedules() -> void:
 		var zone := _segment_for(npc.data, hour)
 		if zone != npc.target_zone:
 			npc.target_zone = zone
-			var spots: Array = _zone_spots[zone]
 			var idx := _all_npcs.find(npc)
-			var spot: Vector3 = spots[idx % spots.size()]
+			var spot: Vector3 = _pick_spot(npc, zone, idx)
 			npc.spot = spot
 			npc.set_path(_path_to(npc.global_position, zone, spot))
 			if _test_mode:
@@ -329,7 +395,7 @@ func _update_sun() -> void:
 	var is_day := hour > 6.2 and hour < 18.8
 	_sun.light_energy = clampf(elev * 1.5, 0.03, 1.25) if is_day else 0.05
 	_sun.light_color = Color(1.0, lerpf(0.75, 0.98, elev), lerpf(0.55, 0.92, elev))
-	_env.ambient_light_energy = lerpf(0.16, 0.6, clampf(elev + 0.25, 0.0, 1.0))
+	_env.ambient_light_energy = lerpf(0.15, 0.52, clampf(elev + 0.25, 0.0, 1.0))
 	_sky_mat.sky_top_color = Color(0.10, 0.16, 0.35).lerp(Color(0.25, 0.5, 0.86), clampf(elev * 1.6, 0.0, 1.0))
 	_sky_mat.sky_horizon_color = Color(0.25, 0.25, 0.35).lerp(Color(0.78, 0.86, 0.95), clampf(elev * 1.6 + 0.15, 0.0, 1.0))
 	var lamp_on := 1.3 if (hour < 6.6 or hour > 18.2) else 0.0
@@ -701,10 +767,15 @@ func _run_captures() -> void:
 	_shot(cam, Vector3(30, 24, 92), Vector3(0, 3, -30))
 	await get_tree().create_timer(0.9).timeout
 	await _shot_file("shot1_campus_wide.png")
-	# character close-up: stand near Anirudh wherever he is
+	# character close-up: Anirudh posed on the quad lawn (deterministic —
+	# free-roaming NPCs rotate away while walking to their timetable zone)
 	var ani: NPC = _mains[0]
+	ani.stationary = true
+	ani.set_path([])
+	ani.global_position = Vector3(14, 0, 22)
+	ani.rotation.y = 0.6
 	var ap := ani.global_position
-	_shot(cam, ap + Vector3(1.7, 1.55, 2.3), ap + Vector3(0, 1.25, 0))
+	_shot(cam, ap + Vector3(1.45, 1.52, 1.95), ap + Vector3(0, 1.28, 0))
 	await get_tree().create_timer(0.9).timeout
 	await _shot_file("shot2_character_closeup.png")
 	# dialogue: teleport player next to Jatin and open the panel
@@ -724,6 +795,50 @@ func _run_captures() -> void:
 	_shot(cam, Vector3(28, 7, -18), Vector3(58, 5, -56))
 	await get_tree().create_timer(0.9).timeout
 	await _shot_file("shot5_library_quad.png")
+	# street level on the main avenue (GTA-style street scene)
+	_shot(cam, Vector3(3.4, 1.7, 80), Vector3(-1.5, 1.9, 40))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot6_avenue.png")
+	# shops row
+	_shot(cam, Vector3(12.0, 1.9, 90), Vector3(25, 1.2, 84))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot7_shops.png")
+	# gardens + pond
+	_shot(cam, Vector3(92, 3.4, 58), Vector3(117, 0.6, 33))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot8_garden.png")
+	# mid-walk-cycle: send a background student across the frame
+	var walker: NPC = _bgs[2]
+	walker.stationary = true
+	walker.set_path([])
+	walker.global_position = Vector3(2.5, 0, 34)
+	walker.rotation.y = -PI / 2.0 # side-on to camera
+	await get_tree().create_timer(0.3).timeout
+	# freeze the walk cycle mid-stride (legs split) as animation proof
+	var wanim: AnimationPlayer = walker._anim
+	if wanim != null and wanim.has_animation("walk"):
+		wanim.play("walk")
+		wanim.seek(0.05, true)
+		wanim.pause()
+	var wp := walker.global_position
+	_shot(cam, wp + Vector3(0.3, 1.32, 3.6), wp + Vector3(0, 0.95, 0))
+	await get_tree().create_timer(0.5).timeout
+	await _shot_file("shot9_walk_cycle.png")
+	# seated on a quad bench
+	var sitter: NPC = _bgs[3]
+	var seat0: Dictionary = (_world["seats"]["quad"] as Array)[0]
+	sitter.target_zone = _segment_for(sitter.data, game_minutes / 60.0)
+	sitter.global_position = seat0["pos"]
+	sitter.spot = seat0["pos"]
+	sitter.set_path([])
+	sitter.seated = true
+	sitter.seat_yaw = seat0["yaw"]
+	sitter.rotation.y = seat0["yaw"]
+	await get_tree().create_timer(0.6).timeout
+	var sp2 := sitter.global_position
+	_shot(cam, sp2 + Vector3(1.8, 1.35, 2.2), sp2 + Vector3(0, 0.85, 0))
+	await get_tree().create_timer(0.5).timeout
+	await _shot_file("shot10_seated.png")
 	print("[CAPTURE] done")
 	get_tree().quit(0)
 

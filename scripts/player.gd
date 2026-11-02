@@ -15,7 +15,8 @@ var _pivot: Node3D
 var _spring: SpringArm3D
 var _cam: Camera3D
 var _model: Dictionary = {}
-var _walk_phase: float = 0.0
+var _anim: AnimationPlayer = null
+var _cur_clip: String = ""
 
 func _ready() -> void:
 	var shape := CollisionShape3D.new()
@@ -25,13 +26,15 @@ func _ready() -> void:
 	shape.shape = cap
 	shape.position.y = 0.86
 	add_child(shape)
-	_model = StudentFactory.build_student({
+	_model = CharModel.build({
 		"height": 1.74, "build": 1.0, "skin": Color(0.60, 0.42, 0.29),
 		"hair_style": 0, "hair_color": Color(0.07, 0.05, 0.04),
 		"shirt": Color(0.85, 0.75, 0.15), "pants": Color(0.20, 0.22, 0.35),
-		"backpack": true, "pack_color": Color(0.25, 0.25, 0.28)
+		"backpack": true, "pack_color": Color(0.25, 0.25, 0.28), "female": false
 	})
 	add_child(_model["root"])
+	_anim = _model.get("anim")
+	_play("idle", 1.0)
 	_pivot = Node3D.new()
 	_pivot.position = Vector3(0, 1.62, 0)
 	add_child(_pivot)
@@ -82,15 +85,17 @@ func _physics_process(delta: float) -> void:
 	if moving:
 		var target_yaw := atan2(velocity.x, velocity.z)
 		_model["root"].rotation.y = lerp_angle(_model["root"].rotation.y, target_yaw, delta * 10.0)
-		_walk_phase += delta * (11.0 if running else 8.0)
+		if running:
+			_play("run", clampf(spd / 3.4, 0.7, 2.4))
+		else:
+			_play("walk", clampf(spd / 1.55, 0.7, 2.8))
 	else:
-		_walk_phase = lerpf(_walk_phase, round(_walk_phase / PI) * PI, delta * 8.0)
-	var swing := sin(_walk_phase) * (0.6 if moving else 0.0)
-	var legs: Array = _model.get("legs", [])
-	var arms: Array = _model.get("arms", [])
-	if legs.size() == 2:
-		(legs[0] as Node3D).rotation.x = swing
-		(legs[1] as Node3D).rotation.x = -swing
-	if arms.size() == 2:
-		(arms[0] as Node3D).rotation.x = -swing * 0.85
-		(arms[1] as Node3D).rotation.x = swing * 0.85
+		_play("idle", 1.0)
+
+func _play(clip: String, speed_scale: float = 1.0) -> void:
+	if _anim == null or not _anim.has_animation(clip):
+		return
+	if _cur_clip != clip:
+		_anim.play(clip)
+		_cur_clip = clip
+	_anim.speed_scale = speed_scale

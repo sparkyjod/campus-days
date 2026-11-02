@@ -4,6 +4,9 @@ extends Node3D
 ## A campus person: main character, background student or staff member.
 ## Moves along waypoint paths supplied by Main (AStar3D graph — never
 ## beelines through buildings), idles at zone spots, shows name + bubbles.
+## Visuals: Blender-built rigged GLB (CharModel) with baked clips —
+## idle / walk (speed-matched) / sit (on bench seats) / talk (dialogue
+## and speech bubbles).
 
 var data: Dictionary = {}
 var is_main: bool = false
@@ -24,13 +27,16 @@ var path: Array = [] # Array[Vector3]
 var path_idx: int = 0
 var speed: float = 1.45
 var talking: bool = false
+var seated: bool = false
+var seat_yaw: float = 0.0
 var rng := RandomNumberGenerator.new()
 
 var _model: Dictionary = {}
+var _anim: AnimationPlayer = null
+var _cur_clip: String = ""
 var _label: Label3D = null
 var _bubble: Label3D = null
 var _bubble_timer: float = 0.0
-var _walk_phase: float = 0.0
 var _idle_timer: float = 0.0
 var _moving: bool = false
 
@@ -41,8 +47,10 @@ func setup(p_data: Dictionary, p_is_main: bool, start_pos: Vector3, p_speed: flo
 	rng.randomize()
 	global_position = start_pos
 	spot = start_pos
-	_model = StudentFactory.build_student(data)
+	_model = CharModel.build(data)
 	add_child(_model["root"])
+	_anim = _model.get("anim")
+	_play("idle", 1.0)
 	# Name label
 	_label = Label3D.new()
 	_label.text = str(data.get("name", "?"))
@@ -71,6 +79,8 @@ func setup(p_data: Dictionary, p_is_main: bool, start_pos: Vector3, p_speed: flo
 func set_path(points: Array) -> void:
 	path = points.duplicate()
 	path_idx = 0
+	if points.size() > 0:
+		seated = false
 
 func show_bubble(text: String, dur: float = 3.5) -> void:
 	_bubble.text = text
@@ -80,6 +90,28 @@ func show_bubble(text: String, dur: float = 3.5) -> void:
 func is_moving() -> bool:
 	return _moving
 
+func _play(clip: String, speed_scale: float = 1.0) -> void:
+	if _anim == null:
+		return
+	if not _anim.has_animation(clip):
+		return
+	if _cur_clip != clip:
+		_anim.play(clip)
+		_cur_clip = clip
+	_anim.speed_scale = speed_scale
+
+func _update_anim() -> void:
+	if talking:
+		_play("talk", 1.0)
+	elif _moving:
+		_play("walk", clampf(speed / 1.55, 0.6, 2.6))
+	elif seated:
+		_play("sit", 1.0)
+	elif _bubble.visible:
+		_play("talk", 1.0)
+	else:
+		_play("idle", 1.0)
+
 func _process(delta: float) -> void:
 	if _bubble_timer > 0.0:
 		_bubble_timer -= delta
@@ -87,7 +119,7 @@ func _process(delta: float) -> void:
 			_bubble.visible = false
 	_moving = false
 	if talking or stationary:
-		_idle_animate(delta)
+		_update_anim()
 		return
 	if path_idx < path.size():
 		var target: Vector3 = path[path_idx]
@@ -104,29 +136,6 @@ func _process(delta: float) -> void:
 			# face movement
 			var target_yaw := atan2(dir.x, dir.z)
 			rotation.y = lerp_angle(rotation.y, target_yaw, delta * 8.0)
-			_walk_phase += delta * speed * 4.4
-	else:
-		_idle_animate(delta)
-	_animate_limbs()
-
-func _idle_animate(delta: float) -> void:
-	_idle_timer += delta
-	_walk_phase = lerpf(_walk_phase, round(_walk_phase / PI) * PI, delta * 6.0)
-	# gentle breathing / look-around using head
-	var head: Node3D = _model.get("head")
-	if head:
-		head.rotation.y = sin(_idle_timer * 0.4 + float(rng.seed % 10)) * 0.18
-
-func _animate_limbs() -> void:
-	var swing := sin(_walk_phase) * (0.55 if _moving else 0.0)
-	var legs: Array = _model.get("legs", [])
-	var arms: Array = _model.get("arms", [])
-	if legs.size() == 2:
-		(legs[0] as Node3D).rotation.x = swing
-		(legs[1] as Node3D).rotation.x = -swing
-	if arms.size() == 2:
-		(arms[0] as Node3D).rotation.x = -swing * 0.8
-		(arms[1] as Node3D).rotation.x = swing * 0.8
-	var root: Node3D = _model.get("root")
-	if root:
-		root.position.y = abs(sin(_walk_phase)) * 0.035 if _moving else 0.0
+	elif seated:
+		rotation.y = lerp_angle(rotation.y, seat_yaw, delta * 5.0)
+	_update_anim()

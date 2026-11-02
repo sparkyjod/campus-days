@@ -31,7 +31,7 @@ static func mains() -> Array:
 			"secret_line": "Between us? I'm applying for a big tech internship next month. Haven't told anyone yet — fingers crossed."
 		},
 		{
-			"name": "Zannat", "major": "Law", "year": 2,
+			"name": "Zannat", "female": true, "major": "Law", "year": 2,
 			"height": 1.68, "build": 0.92, "skin": Color(0.66, 0.47, 0.33),
 			"hair_style": 1, "hair_color": Color(0.05, 0.04, 0.03),
 			"shirt": Color(0.45, 0.10, 0.16), "pants": Color(0.10, 0.10, 0.12),
@@ -51,7 +51,7 @@ static func mains() -> Array:
 			"secret_line": "Confidentially? I sometimes practise my closing arguments to the library plants. They are a very supportive audience."
 		},
 		{
-			"name": "Shreya", "major": "Medicine", "year": 3,
+			"name": "Shreya", "female": true, "major": "Medicine", "year": 3,
 			"height": 1.65, "build": 0.90, "skin": Color(0.70, 0.52, 0.38),
 			"hair_style": 2, "hair_color": Color(0.09, 0.06, 0.04),
 			"shirt": Color(0.88, 0.86, 0.80), "pants": Color(0.35, 0.42, 0.50),
@@ -71,7 +71,7 @@ static func mains() -> Array:
 			"secret_line": "Just between us — I topped the last anatomy test but I cried in the hostel corridor first. Toppers are allowed that, I think."
 		},
 		{
-			"name": "Chirag", "major": "Business", "year": 2,
+			"name": "Chirag", "pattern": "check", "major": "Business", "year": 2,
 			"height": 1.75, "build": 1.08, "skin": Color(0.58, 0.40, 0.27),
 			"hair_style": 4, "hair_color": Color(0.06, 0.05, 0.04),
 			"shirt": Color(0.90, 0.55, 0.08), "pants": Color(0.22, 0.24, 0.30),
@@ -91,7 +91,7 @@ static func mains() -> Array:
 			"secret_line": "Low-key? My dad thinks I'm 'networking' when I bunk. If the fest stall makes profit, I'll finally have proof of concept. And proof for dad."
 		},
 		{
-			"name": "Jatin", "major": "Engineering", "year": 1,
+			"name": "Jatin", "pattern": "stripe", "major": "Engineering", "year": 1,
 			"height": 1.70, "build": 0.95, "skin": Color(0.52, 0.35, 0.23),
 			"hair_style": 3, "hair_color": Color(0.08, 0.06, 0.05),
 			"shirt": Color(0.20, 0.65, 0.30), "pants": Color(0.25, 0.28, 0.35),
@@ -131,7 +131,7 @@ static func mains() -> Array:
 			"secret_line": "You earned this one: 'Shadow' is not my real name. It's what my first art teacher called me — always in a corner, drawing. The name stayed."
 		},
 		{
-			"name": "Gulshan", "major": "Literature", "year": 2,
+			"name": "Gulshan", "pattern": "check", "major": "Literature", "year": 2,
 			"height": 1.73, "build": 1.02, "skin": Color(0.64, 0.46, 0.31),
 			"hair_style": 6, "hair_color": Color(0.10, 0.07, 0.05),
 			"shirt": Color(0.60, 0.42, 0.20), "pants": Color(0.30, 0.26, 0.22),
@@ -151,7 +151,7 @@ static func mains() -> Array:
 			"secret_line": "Shall I tell you a secret? I'm writing a novel about a university very much like this one. Some of the characters... you might recognise them."
 		},
 		{
-			"name": "Yumi", "major": "Psychology", "year": 2,
+			"name": "Yumi", "pattern": "stripe", "female": true, "major": "Psychology", "year": 2,
 			"height": 1.63, "build": 0.88, "skin": Color(0.78, 0.60, 0.45),
 			"hair_style": 5, "hair_color": Color(0.15, 0.10, 0.07),
 			"shirt": Color(0.85, 0.45, 0.55), "pants": Color(0.40, 0.35, 0.55),
@@ -171,7 +171,7 @@ static func mains() -> Array:
 			"secret_line": "Can I share something small? I get stage fright before every performance. Every single one. Then the music starts and it melts. Brains are funny."
 		},
 		{
-			"name": "Diya", "major": "Architecture", "year": 1,
+			"name": "Diya", "female": true, "major": "Architecture", "year": 1,
 			"height": 1.66, "build": 0.90, "skin": Color(0.56, 0.38, 0.25),
 			"hair_style": 2, "hair_color": Color(0.06, 0.05, 0.04),
 			"shirt": Color(0.92, 0.90, 0.86), "pants": Color(0.55, 0.30, 0.18),
@@ -191,7 +191,7 @@ static func mains() -> Array:
 			"secret_line": "Secret sketchbook confession: I've redesigned this entire campus in my notebook — bigger library windows, a better canteen roof. Someday, maybe."
 		},
 		{
-			"name": "Aarya", "major": "Commerce", "year": 3,
+			"name": "Aarya", "female": true, "major": "Commerce", "year": 3,
 			"height": 1.69, "build": 0.94, "skin": Color(0.62, 0.43, 0.30),
 			"hair_style": 0, "hair_color": Color(0.07, 0.06, 0.05),
 			"shirt": Color(0.20, 0.45, 0.40), "pants": Color(0.18, 0.20, 0.24),
@@ -213,7 +213,7 @@ static func mains() -> Array:
 	]
 
 static func background_names() -> Array:
-	return ["Priya", "Rohan", "Sneha", "Arjun", "Kavya", "Vikram", "Meera", "Aditya", "Ishita", "Karan", "Pooja", "Rahul", "Ananya", "Dev", "Nisha", "Sameer", "Tanya", "Varun", "Riya", "Nikhil"]
+	return ["Priya", "Rohan", "Sneha", "Arjun", "Kavya", "Vikram", "Meera", "Aditya", "Ishita", "Karan", "Pooja", "Rahul", "Ananya", "Dev", "Nisha", "Sameer", "Tanya", "Varun", "Riya", "Nikhil", "Farhan", "Gauri", "Imran", "Jyoti", "Kabir", "Lakshmi", "Manav", "Neha"]
 
 static func background_greetings() -> Array:
 	return [

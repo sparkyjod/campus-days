@@ -24,7 +24,7 @@ chai stall, cricket pitch + football, auto-rickshaw & bus, Indian names and dial
   ACES tone mapping, HUD clock + period name
 - ✅ Procedural textures (brick, concrete, grass, paving, roof tile, wood, marble) —
   no large flat single-colour walls
-- 🟡 Performance: shared meshes/materials everywhere; formal 60 fps profiling pass → Phase 5
+- 🟡 Performance: shared meshes/materials everywhere; MSAA 2x on; formal 60 fps profiling pass → Phase 5
 - Acceptance (master prompt: "walk the quad at 3 times of day, no clipping"):
   sun/lighting verified at 07:30/10:30 in captures; collision shapes registered for every
   wall/prop (player uses move_and_slide); **PASS** (manual walkthrough in web build advised)
@@ -52,16 +52,19 @@ chai stall, cricket pitch + football, auto-rickshaw & bus, Indian names and dial
 - ✅ Canteen economy slice: lunch counter 13:00–14:00, Thali ₹60 → +35 energy;
   closed message outside lunch; Chai Point stall 07:00–21:00, chai ₹15 → +8 energy;
   insufficient-funds handling on both
-- ✅ Background NPCs: 16 working students with Indian names — same waypoint
-  pathfinding/collision, simple schedule loops, smaller grey name labels,
-  one-line greetings (no friendship tracking, by design)
-- ✅ Staff NPCs: Mrs. Iyer (Librarian), Mr. Khan (Food Court), Ramesh (Chai Stall) —
-  stationary, role greetings
+- ✅ Background NPCs: 24 working students with Indian names (16 in the first
+  delivery, +8 in the overhaul) — same waypoint pathfinding/collision, simple
+  schedule loops incl. the new zones, smaller grey name labels, one-line
+  greetings (no friendship tracking, by design); several sit on quad/garden
+  benches via the sit clip
+- ✅ Staff NPCs: Mrs. Iyer (Librarian), Mr. Khan (Food Court), Ramesh (Chai Stall),
+  Bhola (Shops, added in the overhaul) — stationary, role greetings
 - ✅ Indian food court menu board (Thali ₹60, Biryani ₹140, Masala Dosa ₹80,
   Samosa ₹20, Cutlet ₹30, Cold Drink ₹25), cricket pitch + football goals,
   bus + auto-rickshaw at the gate
-- 🟡 Character models: distinct and proportioned, but stylised — realistic anatomy,
-  richer facial detail and mannerism animations → Phase 5 polish (per §10 bar)
+- ✅ Character models (upgraded in the overhaul change round, see below): Blender-built
+  rigged GLB students with baked idle/walk/run/sit/talk animation — realistic
+  anatomy and mannerism polish still → Phase 5 (per §10 bar)
 - 🟡 Interiors: open-plan single floor per building; room subdivision, tiered
   lecture seating, library floors → Phase 4
 - 🟡 Dialogue memory: within-session (chat counts, daily compliment caps, hobby/
@@ -102,12 +105,15 @@ chai stall, cricket pitch + football, auto-rickshaw & bus, Indian names and dial
 
 ## Phase 4 — Full Semester ⏳
 
-- ⏳ Remaining zones in full detail: Lecture Blocks B & C, Admin Block, campus shops,
-  gardens & lake corner, gym/swimming in sports complex
+- 🟡 Remaining zones: Lecture Blocks B & C, Admin Block, campus shops row, gardens &
+  lake corner were pulled forward as built structures in the overhaul change round
+  (exteriors + simple interiors, working NPC zones) — full detail, gym/swimming in
+  sports complex → still Phase 4
 - ⏳ Clubs & societies as joinable systems (coding, debate, dance, music, football,
   art, literature, finance) with weekly sessions
-- ⏳ Sports activities (football practice, running, basketball), dorm life full
-  (room decoration, roommate, knocking on doors)
+- 🟡 Sports: running track + basketball court built in the overhaul; sports
+  activities (football practice, running, basketball as gameplay), dorm life full
+  (room decoration, roommate, knocking on doors) → Phase 4
 - ⏳ Exams Week 8 (mid-sem) & Week 12 (finals), results day, week/semester summaries
 - ⏳ Sports Meet (Week 10), full 12-week calendar playthrough
 - ⏳ Weather system (clear/cloudy/rain) with logical crowd/mood effects
@@ -116,14 +122,83 @@ chai stall, cricket pitch + football, auto-rickshaw & bus, Indian names and dial
 
 ## Phase 5 — Polish & Ports ⏳
 
-- ⏳ Graphics screenshot-review pass against §10 bar (wide campus + character close-up)
-- ⏳ Character model/animation upgrade (mannerisms: Jatin bounces, Shadow slouches…)
+- 🟡 Graphics screenshot-review pass against §10 bar: first pass done in the overhaul
+  change round (10-shot set incl. street-level avenue + character close-up with
+  visible face) — characters/buildings still stylised, not §10-realistic; final
+  pass → Phase 5
+- 🟡 Character model/animation upgrade: Blender rigs + idle/walk/run/sit/talk clips
+  shipped in the overhaul; per-character mannerisms (Jatin bounces, Shadow
+  slouches…) → Phase 5
 - ⏳ Audio: ambient campus, bell, footsteps, UI, phone, background music (CC0/generated)
 - ⏳ Performance pass (LOD, occlusion, draw-call budget), accessibility options
   (text size, remappable keys, camera sensitivity), gamepad + touch controls
 - ⏳ Exports: Web (done for Phase 1 slice), Windows, Android
 - ⏳ Final QA sweep per §13 checklist (fresh save, loaded save, day/sleep transitions,
   quest start→finish, 0-energy/0-money edges, mobile layout)
+
+---
+
+## Change round — Graphics + World Density + Blender Characters (2026-11-03)
+
+User review of the Phase 0+1 preview: "graphics like GTA V", "the world looks
+so empty", plus "add movement animations" and "build characters in Blender".
+Scope stayed inside Phase 0+1 (no Phase 2 systems started).
+
+**A. Graphics (GTA-style presentation within GL Compatibility limits)**
+- ✅ Lighting/atmosphere: distance fog + warm haze, Environment colour
+  adjustment (contrast/saturation), sky-bounce fill light, sun shadow blur,
+  puffy cloud clusters, MSAA 2x
+- ✅ Materials: 512px procedural textures with per-brick/per-slab colour
+  jitter, grime/stains/wear, shared roughness-variation map, mipmaps;
+  asphalt avenues (worn patches), glass curtain facade on Block C
+- ✅ Building detail on every block: cornice + parapet railing, accent floor
+  band, skirting/plinth, entrance canopy on columns, door leaf ajar, sign on
+  a backing panel (lettering scaled to facade), roof water tank + AC units,
+  downpipes, window AC boxes
+- 🟡 Still short of §10/GTA V realism: stylised low-poly look, no PBR texture
+  sets, no baked lightmaps/GI. IMPOSSIBLE in the Compatibility (web)
+  renderer and noted honestly, not faked: **glow/bloom, SSR, SDFGI,
+  volumetric fog** — those need Forward+ (desktop builds, Phase 5 ports).
+
+**B. World density (no longer empty)**
+- ✅ New structures: Lecture Block B, Lecture Block C (glass front), Admin
+  Block, shops row near the gate (Juice Junction, Stationery & Prints,
+  Xerox Point, Campus Books — awnings, crates, hand cart, overhead wires),
+  gardens with paths/flower beds/pond ("Lake Corner"), open-air amphitheatre,
+  parking lot, glass bus shelter, basketball court, running track ring,
+  east bleachers, cricket stumps, floodlight pylons
+- ✅ Street scene: asphalt avenues with dashed lane lines, zebra crossings,
+  painted kerbs, avenue banners, streetlight poles, gate flags, signposts,
+  dustbins, extra notice boards, cycle stands with bicycles, chai-stall
+  umbrella tables
+- ✅ Vehicles: 4 detailed cars (glasshouse, lights, hubcaps), 4 scooters
+  (windscreen, mirrors-class detail), 9 bicycles across 2 cycle stands —
+  plus the existing bus + auto-rickshaw
+- ✅ Props: trees 19 → 41 (3 canopy shades, varied scale), 16 bushes,
+  14 flower beds, benches 7 → 14
+- ✅ Life: background NPCs 16 → 24 (new schedule templates using Blocks
+  B/C, Admin, shops, gardens), +1 staff (Bhola, shops); bench sitting in
+  quad + gardens via the sit clip
+
+**C. Blender characters + movement animation**
+- ✅ Blender 4.5.15 LTS installed at ~/workspace/tools/; characters built by
+  `tools/build_characters.py` (bpy): male + female humanoid rigs, 19-bone
+  armature, smooth bevelled forms (no box/capsule people), 3D faces
+  (eyes/brows/nose/lips/ears), 8 mesh hair styles, backpack
+- ✅ Baked clips exported in the GLBs: **idle** (breathing/sway), **walk**,
+  **run**, **sit**, **talk** (gestures + nods)
+- ✅ Wiring: NPCs play walk speed-matched to ground speed, idle on arrival,
+  sit on bench seats, talk during dialogue/bubbles; the player uses the
+  same male rig (idle/walk/run with Shift). Per-character identity via
+  skin-tone roughness-tuned materials, hair style meshes, outfit colours +
+  stripe/check shirt patterns, backpack toggle, name labels
+- 🟡 Hair caps were QA'd from a render: fringe covered the eyes — fixed
+  (caps shifted back/up); close-up screenshot verifies eyes/brows visible
+- Acceptance: headless full-day sim re-run — exit 0, **zero script errors**,
+  226 zone-change events, **34/34 non-staff NPCs arrived** (10 mains + 24
+  background), day rolled over; 10 screenshots in `preview/` incl.
+  street-level avenue (shot6), shops (shot7), garden (shot8), walk-cycle
+  frame (shot9), seated (shot10). Web export refreshed: 41 MB total.
 
 ---
 
@@ -134,12 +209,12 @@ chai stall, cricket pitch + football, auto-rickshaw & bus, Indian names and dial
 | Main scene loads headless | ✅ `[CampusDays] Ready… NPCs in world: 29` |
 | Script errors in full-day simulation | ✅ 0 (`-- --campus-test`, exit code 0) |
 | Clock advances, day rolls over | ✅ Day 1 → Day 2 in test |
-| NPCs follow timetables | ✅ 166 zone-change events logged in one simulated day |
-| NPCs physically arrive (pathfinding) | ✅ 26/26 non-staff NPCs arrived at scheduled zones |
+| NPCs follow timetables | ✅ 226 zone-change events logged in one simulated day (overhaul build) |
+| NPCs physically arrive (pathfinding) | ✅ 34/34 non-staff NPCs arrived at scheduled zones (overhaul build; was 26/26) |
 | All ten mains in-world | ✅ 10/10 spawned with labels (see preview shots) |
 | Dialogue + friendship changes | ✅ Panel verified in capture (shot3); choices wired to friendship |
 | Canteen lunch-only rule | ✅ Code path verified (open 13–14, closed message otherwise) |
-| Screenshots | ✅ 5 PNGs in `preview/` (xvfb capture run, 0 script errors) |
+| Screenshots | ✅ 10 PNGs in `preview/` (xvfb capture run, 0 script errors) |
 | Web export | ✅ Godot 4.3 templates installed; export succeeded → `build/web/` (threads OFF, no COOP/COEP needed) |
 | Vercel deploy | 🟡 Project `campus-days` created (team sparkyjods-projects); file upload blocked — see delivery report (35 MB wasm exceeds MCP CLI argument transport). `build/web/` + `deploy-web.sh` are deploy-ready |
 

@@ -14,7 +14,10 @@ union, residence hall, sports complex with cricket + football, gate bus loop) ×
 Indian campus life (₹, thali/dosa/biryani menu, Chai Point stall, auto-rickshaw).
 The ten main characters live on real timetables and walk the waypoint network
 between dorm, lectures, library, lunch, clubs and evening spots. Talk to them to
-build friendship (0–100). 16 background students + 3 staff keep the campus alive.
+build friendship (0–100). 24 background students + 4 staff keep the campus alive.
+Characters are Blender-built rigged models (idle/walk/run/sit/talk animation);
+the campus now also has Lecture Blocks B & C, an Admin Block, a shops row,
+gardens with a pond and amphitheatre, a running track and basketball court.
 Buy a ₹60 thali at the Food Court counter during lunch (13:00–14:00) or a ₹15
 chai at the stall (07:00–21:00).
 
