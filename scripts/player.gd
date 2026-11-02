@@ -1,0 +1,96 @@
+class_name Player
+extends CharacterBody3D
+
+## Third-person student controller: WASD + mouse look, Shift to run,
+## real collision via CharacterBody3D (no walking through walls/props).
+
+var walk_speed: float = 3.4
+var run_speed: float = 6.2
+var speed_factor: float = 1.0 # energy effects applied by Main
+var controls_locked: bool = false
+
+var _yaw: float = 0.0
+var _pitch: float = -0.32
+var _pivot: Node3D
+var _spring: SpringArm3D
+var _cam: Camera3D
+var _model: Dictionary = {}
+var _walk_phase: float = 0.0
+
+func _ready() -> void:
+	var shape := CollisionShape3D.new()
+	var cap := CapsuleShape3D.new()
+	cap.radius = 0.32
+	cap.height = 1.72
+	shape.shape = cap
+	shape.position.y = 0.86
+	add_child(shape)
+	_model = StudentFactory.build_student({
+		"height": 1.74, "build": 1.0, "skin": Color(0.60, 0.42, 0.29),
+		"hair_style": 0, "hair_color": Color(0.07, 0.05, 0.04),
+		"shirt": Color(0.85, 0.75, 0.15), "pants": Color(0.20, 0.22, 0.35),
+		"backpack": true, "pack_color": Color(0.25, 0.25, 0.28)
+	})
+	add_child(_model["root"])
+	_pivot = Node3D.new()
+	_pivot.position = Vector3(0, 1.62, 0)
+	add_child(_pivot)
+	_spring = SpringArm3D.new()
+	_spring.spring_length = 5.2
+	_spring.margin = 0.35
+	_pivot.add_child(_spring)
+	_cam = Camera3D.new()
+	_cam.fov = 62.0
+	_spring.add_child(_cam)
+	_cam.current = true
+
+func get_camera() -> Camera3D:
+	return _cam
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and not controls_locked:
+		var mm := event as InputEventMouseMotion
+		_yaw -= mm.relative.x * 0.0026
+		_pitch = clampf(_pitch - mm.relative.y * 0.0026, -1.1, 0.55)
+
+func _physics_process(delta: float) -> void:
+	_pivot.rotation = Vector3(_pitch, _yaw, 0)
+	var input_dir := Vector2.ZERO
+	if not controls_locked:
+		if Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP):
+			input_dir.y -= 1.0
+		if Input.is_physical_key_pressed(KEY_S):
+			input_dir.y += 1.0
+		if Input.is_physical_key_pressed(KEY_A):
+			input_dir.x -= 1.0
+		if Input.is_physical_key_pressed(KEY_D):
+			input_dir.x += 1.0
+	var running := Input.is_physical_key_pressed(KEY_SHIFT) and input_dir != Vector2.ZERO
+	var spd := (run_speed if running else walk_speed) * speed_factor
+	var basis_yaw := Basis(Vector3.UP, _yaw)
+	var dir3 := (basis_yaw * Vector3(input_dir.x, 0, input_dir.y))
+	if dir3.length() > 0.001:
+		dir3 = dir3.normalized()
+	velocity.x = dir3.x * spd if input_dir != Vector2.ZERO else 0.0
+	velocity.z = dir3.z * spd if input_dir != Vector2.ZERO else 0.0
+	if not is_on_floor():
+		velocity.y -= 22.0 * delta
+	else:
+		velocity.y = -0.5
+	move_and_slide()
+	var moving := Vector2(velocity.x, velocity.z).length() > 0.3
+	if moving:
+		var target_yaw := atan2(velocity.x, velocity.z)
+		_model["root"].rotation.y = lerp_angle(_model["root"].rotation.y, target_yaw, delta * 10.0)
+		_walk_phase += delta * (11.0 if running else 8.0)
+	else:
+		_walk_phase = lerpf(_walk_phase, round(_walk_phase / PI) * PI, delta * 8.0)
+	var swing := sin(_walk_phase) * (0.6 if moving else 0.0)
+	var legs: Array = _model.get("legs", [])
+	var arms: Array = _model.get("arms", [])
+	if legs.size() == 2:
+		(legs[0] as Node3D).rotation.x = swing
+		(legs[1] as Node3D).rotation.x = -swing
+	if arms.size() == 2:
+		(arms[0] as Node3D).rotation.x = -swing * 0.85
+		(arms[1] as Node3D).rotation.x = swing * 0.85
