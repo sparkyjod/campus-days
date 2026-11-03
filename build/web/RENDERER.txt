@@ -1,0 +1,3 @@
+renderer=gl_compatibility
+build=Web (release, threads off)
+exported=2026-11-03T05:12:59Z
