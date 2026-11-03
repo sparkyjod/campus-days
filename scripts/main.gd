@@ -181,9 +181,13 @@ var _hud_clock: Label
 var _hud_period: Label
 var _hud_money: Label
 var _hud_energy: ProgressBar
+var _hud_energy_pct: Label
 var _hud_gpa: Label
 var _hud_health: ProgressBar
+var _hud_health_pct: Label
 var _hud_stress: ProgressBar
+var _hud_stress_pct: Label
+var _hud_stress_fill: StyleBoxFlat
 var _hud_social: Label
 var _hud_objective: Label
 var _minimap: Minimap
@@ -3798,6 +3802,41 @@ func _mk_label(text: String, size: int = 20, color: Color = Color.WHITE) -> Labe
 	l.add_theme_constant_override("shadow_offset_y", 1)
 	return l
 
+# Compact HUD stat bar: coloured fill on a subtle dark track. The %
+# is NOT drawn inside the slim bar (unreadable at 11 px tall) — it is
+# a separate matching-colour side label built by _hud_bar_row and
+# updated by _refresh_hud.
+func _hud_bar(fill: Color) -> ProgressBar:
+	var bar := ProgressBar.new()
+	bar.min_value = 0
+	bar.max_value = 100
+	bar.show_percentage = false
+	bar.custom_minimum_size = Vector2(124, 11)
+	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var track := StyleBoxFlat.new()
+	track.bg_color = Color(1, 1, 1, 0.13)
+	track.set_corner_radius_all(5)
+	bar.add_theme_stylebox_override("background", track)
+	var fb := StyleBoxFlat.new()
+	fb.bg_color = fill
+	fb.set_corner_radius_all(5)
+	bar.add_theme_stylebox_override("fill", fb)
+	return bar
+
+func _hud_bar_row(parent: VBoxContainer, caption: String, accent: Color, bar: ProgressBar) -> Label:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	var cap := _mk_label(caption, 10, Color(0.92, 0.94, 0.97))
+	cap.custom_minimum_size = Vector2(42, 0)
+	row.add_child(cap)
+	row.add_child(bar)
+	var pct := _mk_label("0%", 10, accent)
+	pct.custom_minimum_size = Vector2(30, 0)
+	pct.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	row.add_child(pct)
+	parent.add_child(row)
+	return pct
+
 func _build_ui() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
@@ -3832,68 +3871,66 @@ void fragment() {
 		grade.material = shmat
 		layer.add_child(grade)
 		_grade_applied = true
-	# top-left status panel — fix round (item 3): clean professional
-	# panel (rounded corners, even padding, subtle border) instead of
-	# the default flat grey box.
+	# Top-left status dashboard — compact + colourful pass (user
+	# request after the fix round): the fix-round panel measured
+	# 311x324 px at 1280x720; this layout targets ~224x~185. Same dark
+	# rounded panel, but tighter margins/fonts, slim COLOURED bars
+	# (grey before) with the % as a matching side label, and a tasteful
+	# accent colour per element. Presentation only — _refresh_hud
+	# still writes the same values at the same cadence.
 	var panel := PanelContainer.new()
-	panel.position = Vector2(14, 12)
+	panel.position = Vector2(10, 10)
 	var psb := StyleBoxFlat.new()
 	psb.bg_color = Color(0.07, 0.09, 0.13, 0.82)
-	psb.set_corner_radius_all(10)
-	psb.set_content_margin_all(12)
+	psb.set_corner_radius_all(8)
+	psb.content_margin_left = 8
+	psb.content_margin_right = 8
+	psb.content_margin_top = 7
+	psb.content_margin_bottom = 7
 	psb.border_color = Color(1, 1, 1, 0.16)
 	psb.set_border_width_all(1)
 	panel.add_theme_stylebox_override("panel", psb)
 	layer.add_child(panel)
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 4)
+	vb.add_theme_constant_override("separation", 3)
 	panel.add_child(vb)
-	_hud_day = _mk_label("Day 1 • Week 1 of 12", 20, Color(1.0, 0.95, 0.75))
-	_hud_clock = _mk_label("07:30", 30)
-	_hud_period = _mk_label("Morning", 18, Color(0.85, 0.92, 1.0))
-	_hud_money = _mk_label("₹ 500", 20, Color(0.75, 1.0, 0.75))
-	vb.add_child(_hud_day)
-	vb.add_child(_hud_clock)
-	vb.add_child(_hud_period)
-	vb.add_child(_hud_money)
-	var erow := HBoxContainer.new()
-	erow.add_child(_mk_label("Energy", 16))
-	_hud_energy = ProgressBar.new()
-	_hud_energy.min_value = 0
-	_hud_energy.max_value = 100
-	_hud_energy.value = energy
-	_hud_energy.custom_minimum_size = Vector2(170, 15)
-	_hud_energy.add_theme_font_size_override("font_size", 11)
-	erow.add_child(_hud_energy)
-	vb.add_child(erow)
-	# Phase 2 HUD: GPA / health / stress / social / objective
-	_hud_gpa = _mk_label("GPA 7.50 / 10", 18, Color(1.0, 0.9, 0.5))
+	# header row: day/week (warm cream) left, clock (white) right
+	var hrow1 := HBoxContainer.new()
+	hrow1.add_theme_constant_override("separation", 6)
+	_hud_day = _mk_label("Day 1 • Week 1 of 12", 12, Color(1.0, 0.85, 0.45))
+	_hud_day.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hrow1.add_child(_hud_day)
+	_hud_clock = _mk_label("07:30", 16, Color(1.0, 1.0, 1.0))
+	hrow1.add_child(_hud_clock)
+	vb.add_child(hrow1)
+	# second row: day segment (soft blue) left, money (green) right
+	var hrow2 := HBoxContainer.new()
+	hrow2.add_theme_constant_override("separation", 6)
+	_hud_period = _mk_label("Morning", 11, Color(0.62, 0.83, 1.0))
+	_hud_period.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hrow2.add_child(_hud_period)
+	_hud_money = _mk_label("₹ 500", 13, Color(0.45, 0.95, 0.5))
+	hrow2.add_child(_hud_money)
+	vb.add_child(hrow2)
+	# GPA line (gold) — Phase 2 HUD
+	_hud_gpa = _mk_label("GPA 7.50 / 10 • Computer Science", 11, Color(1.0, 0.84, 0.3))
 	vb.add_child(_hud_gpa)
-	var hrow := HBoxContainer.new()
-	hrow.add_child(_mk_label("Health", 16))
-	_hud_health = ProgressBar.new()
-	_hud_health.min_value = 0
-	_hud_health.max_value = 100
+	# coloured stat bars: name | slim coloured fill | % side label
+	_hud_energy = _hud_bar(Color(0.62, 0.9, 0.25))
+	_hud_energy.value = energy
+	_hud_energy_pct = _hud_bar_row(vb, "Energy", Color(0.62, 0.9, 0.25), _hud_energy)
+	_hud_health = _hud_bar(Color(0.98, 0.4, 0.48))
 	_hud_health.value = health
-	_hud_health.custom_minimum_size = Vector2(170, 14)
-	_hud_health.add_theme_font_size_override("font_size", 11)
-	hrow.add_child(_hud_health)
-	vb.add_child(hrow)
-	var srow := HBoxContainer.new()
-	srow.add_child(_mk_label("Stress", 16))
-	_hud_stress = ProgressBar.new()
-	_hud_stress.min_value = 0
-	_hud_stress.max_value = 100
+	_hud_health_pct = _hud_bar_row(vb, "Health", Color(0.98, 0.4, 0.48), _hud_health)
+	_hud_stress = _hud_bar(Color(1.0, 0.62, 0.15))
 	_hud_stress.value = stress
-	_hud_stress.custom_minimum_size = Vector2(170, 14)
-	_hud_stress.add_theme_font_size_override("font_size", 11)
-	srow.add_child(_hud_stress)
-	vb.add_child(srow)
-	_hud_social = _mk_label("Social 50", 16, Color(0.8, 0.9, 1.0))
+	_hud_stress_fill = _hud_stress.get_theme_stylebox("fill") as StyleBoxFlat
+	_hud_stress_pct = _hud_bar_row(vb, "Stress", Color(1.0, 0.62, 0.15), _hud_stress)
+	_hud_social = _mk_label("Social 50", 11, Color(0.45, 0.8, 1.0))
 	vb.add_child(_hud_social)
-	_hud_objective = _mk_label("🎯 Orientation: talk to a teacher", 15, Color(1.0, 0.85, 0.3))
+	_hud_objective = _mk_label("🎯 Orientation: talk to a teacher", 11, Color(1.0, 0.8, 0.25))
 	_hud_objective.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_hud_objective.custom_minimum_size = Vector2(262, 0)
+	_hud_objective.custom_minimum_size = Vector2(208, 0)
 	vb.add_child(_hud_objective)
 	# top-right buttons
 	var bb := HBoxContainer.new()
@@ -4268,10 +4305,26 @@ func _refresh_hud() -> void:
 	_hud_period.text = _period_name(game_minutes / 60.0)
 	_hud_money.text = "₹ %d" % money
 	_hud_energy.value = energy
+	if _hud_energy_pct != null:
+		_hud_energy_pct.text = "%d%%" % int(round(energy))
 	if _hud_gpa != null:
 		_hud_gpa.text = "GPA %.2f / 10 • %s" % [gpa, player_major]
 		_hud_health.value = health
+		if _hud_health_pct != null:
+			_hud_health_pct.text = "%d%%" % int(round(health))
 		_hud_stress.value = stress
+		if _hud_stress_pct != null:
+			_hud_stress_pct.text = "%d%%" % int(round(stress))
+		# stress colour escalates orange -> deep orange -> red as it climbs
+		if _hud_stress_fill != null:
+			var sc := Color(1.0, 0.62, 0.15)
+			if stress >= 75.0:
+				sc = Color(0.95, 0.25, 0.2)
+			elif stress >= 50.0:
+				sc = Color(1.0, 0.45, 0.1)
+			_hud_stress_fill.bg_color = sc
+			if _hud_stress_pct != null:
+				_hud_stress_pct.add_theme_color_override("font_color", sc)
 		_hud_social.text = "Social %d • %s" % [int(social), player_name]
 		if _quest_index < _quests.size():
 			_hud_objective.text = "🎯 %s" % str(_quests[_quest_index]["title"])
@@ -4922,6 +4975,19 @@ func _run_captures() -> void:
 	_shot(cam, Vector3(-26, 2.3, 69.0), Vector3(-26, 3.0, 74.2))
 	await get_tree().create_timer(0.9).timeout
 	await _shot_file("shot25_sign_back.png")
+	# shot26: the compact + colourful HUD dashboard (post-fix-round
+	# user request) — same lunch-avenue framing as shot11 so the old
+	# and new dashboards compare directly.
+	game_minutes = 13.0 * 60.0
+	_update_sun()
+	_player.global_position = Vector3(6, 0, 30)
+	stress = 68.0 # mid-orange stress band for the colour check
+	_refresh_hud()
+	_shot(cam, Vector3(0, 1.7, 28), Vector3(1, 1.5, 95))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot26_hud_compact.png")
+	stress = 30.0
+	_refresh_hud()
 	_player.global_position = Vector3(-130, 0, 100)
 	print("[CAPTURE] done")
 	get_tree().quit(0)

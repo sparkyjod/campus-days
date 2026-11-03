@@ -856,3 +856,39 @@ mobile UI behaviour at all.
   (Compatibility), Android apk 40,449,438 B (Compatibility, signed);
   RENDERER.txt correct in each folder; project.godot restored to
   gl_compatibility afterwards.
+
+### Addendum — compact + colourful HUD dashboard (user request, 2026-11-03)
+
+The user, looking at the fix-round HUD, asked for the top-left
+dashboard to be "colourful and less space taking". Presentation-only
+change to the panel built in `_build_ui` / refreshed in
+`_refresh_hud` (scripts/main.gd); no game logic, values or refresh
+cadence touched.
+
+- **Footprint** (panel size measured in a real 1280x720 render,
+  both builds, same method): **311x324 px -> 224x169 px** — 28%
+  narrower, 48% shorter, ~52% less screen area. Same information:
+  day/week, clock, day segment, money, Energy, GPA + major, Health,
+  Stress, Social + status, current quest line. Achieved with two
+  side-by-side header rows (day+clock, segment+money), 8/7 px panel
+  margins, 10-13 px fonts and slim 11 px bars. At 224 px wide and
+  anchored top-left it clears the top-centre buttons and the
+  bottom-right minimap at 1280x720 and on the mobile build's smaller
+  landscape resolutions.
+- **Colour**: money green; Energy fill lime; Health fill rose;
+  Stress fill orange, deepening at >=50 and turning red at >=75
+  (label recolours with it); GPA and the quest line gold; Social sky
+  blue; day/week warm cream, day segment soft blue, clock white.
+  Bars are coloured fills on a subtle light-on-dark track (they were
+  grey); the % moved out of the slim bar into a matching-colour side
+  label so it stays readable. Panel itself unchanged: the fix-round
+  dark rounded panel, so the colours pop against it.
+- **Evidence**: new `preview/shot26_hud_compact.png` (street level,
+  lunch avenue — stress staged at 68% for the shot only, showing the
+  deep-orange band); the full capture tour was re-run so every
+  preview (shot11 minimap HUD included) shows the new dashboard.
+  Headless suite on final code: exit 0, zero script errors, TEST_FIX /
+  P2 / P3 / P4 / P5 + semester harness PASS, also under
+  `--touch-test`. All three exports refreshed again via
+  `tools/export_dual.sh`; APK `apksigner verify` passes
+  (v1/v2/v3 schemes).
