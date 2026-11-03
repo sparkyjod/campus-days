@@ -92,6 +92,19 @@ func _physics_process(delta: float) -> void:
 	else:
 		_play("idle", 1.0)
 
+## Phase 2 character creation: rebuild the visible model with the
+## chosen appearance preset (hair, gendered rig, shirt, skin).
+func apply_appearance(cfg: Dictionary) -> void:
+	var old_root: Node3D = _model.get("root")
+	if old_root != null and old_root.get_parent() == self:
+		remove_child(old_root)
+		old_root.queue_free()
+	_model = CharModel.build(cfg)
+	add_child(_model["root"])
+	_anim = _model.get("anim")
+	_cur_clip = ""
+	_play("idle", 1.0)
+
 func _play(clip: String, speed_scale: float = 1.0) -> void:
 	if _anim == null or not _anim.has_animation(clip):
 		return

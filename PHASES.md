@@ -134,19 +134,121 @@ teleports in `scripts/main.gd:_run_captures` — gameplay is unchanged).
   the fixer (D1–D5 confirmed in the images, not just in code); web export
   refreshed (41 MB). build/windows/ is still Stage 3's export job.
 
-## Phase 2 — Stats & Academics ⏳ (not started — awaiting user review)
+## Phase 2 — Stats & Academics ✅ (completed 2026-11-03; local commit only, push is Stage 3's job)
 
-- ⏳ Stats engine full set: GPA/Academics, Health, Stress, Social/Reputation + Skills
-  (Energy + Money exist in Phase 1 HUD in basic form)
-- ⏳ Player character creation (name, appearance, major choice → own timetable)
-- ⏳ Lectures as activities (note-taking/Q&A), library study sessions, group study
-- ⏳ Assignments with deadlines; attendance consequences + professor remarks
-- ⏳ Part-time jobs (library assistant, canteen counter, tutoring, freelancing)
-- ⏳ Sleep → day transition + Save system (3 slots + autosave, consistent NPC restore)
-- ⏳ Phone: messages from characters, Campus Buzz feed, calendar, map, wallet
-- ⏳ Calendar events wiring (orientation, assignment weeks — full calendar §4)
-- Acceptance (from master prompt): skip a week → GPA falls; study → recovers;
-  save/load restores consistently
+Built on the Phase 0+1 base by finishing the substantial partial work already
+in the working tree (new `scripts/dialogue.gd`, `minimap.gd`,
+`phase2_data.gd`, `save_system.gd`; `main.gd` +~1050 lines, `npc.gd`/
+`player.gd` touches). Two genuine defects in that partial work were found
+by running the headless test (the previous builder had evidently never run
+it) and fixed, not papered over:
+- (1) New `class_name` scripts were invisible to the engine: the
+  `.godot/global_script_class_cache.cfg` predated them, so `main.gd`
+  failed to parse (`Minimap`/`Phase2Data`/`Dialogue`/`SaveSystem`
+  undeclared). Fix: `--import` to regenerate the cache (now contains all
+  four classes); import is now clean (0 script errors).
+- (2) Save/load crashed on `FileAccess.get_as_utf8_string()`, which does
+  not exist on Godot 4 `FileAccess`. Fix: read
+  `f.get_buffer(f.get_length()).get_string_from_utf8()`. Also fixed two
+  `:=` type-inference failures (`save_system.gd` FileAccess vars,
+  `main.gd` topic pick from an untyped Array) with explicit annotations.
+
+- ✅ Stats engine: GPA, Health, Stress, Social + 5 Skills (Study, Sport,
+  Music/Art, Tech, Communication) in the HUD and the phone Wallet tab.
+  Study skill levels up through study sessions; see 🟡 below for the
+  other four skills.
+- ✅ Player character creation: name entry, 9 majors (CS, Medicine, Law,
+  Literature, Business, Fine Arts, Engineering, Psychology, Architecture),
+  6 appearance presets (rebuilds the visible model via
+  `player.apply_appearance`); the chosen major sets the lecture block,
+  the professor and assignment subjects, and re-targets the quest chain.
+- ✅ Lectures as activities: attend in-block during 09–11 / 11–13 / 14–16
+  with per-major Q&A (correct +0.06 GPA in own block, +0.03 visiting,
+  +0.02 for trying); one attendance per slot per day.
+- ✅ Library study sessions (solo +25 / group-with-friend +40 assignment
+  progress, Study XP, GPA +0.03, stress −2) and group study bonus.
+- ✅ Assignments with deadlines (3 templates, due Days 5/12/19): progress
+  via study and office hours, submit in the library (+0.15 GPA), overdue
+  penalty −0.30 GPA with a professor message.
+- ✅ Attendance consequences + professor remarks: missed weekday lecture
+  slots cost −0.08 GPA each at day end, with a message from the player's
+  own professor; office hours (once/day/teacher) give GPA +0.05,
+  assignment +20, friendship +3.
+- ✅ Part-time jobs: Library Assistant ₹150, Canteen Counter ₹120,
+  Tutoring ₹200 (needs GPA 7.0+), Freelance ₹250; one shift per job per
+  day, energy costs, location gates for library/canteen.
+- ✅ Sleep → day transition + save system: sleep only in the dorm;
+  day advance resets jobs/compliments, applies attendance/overdue/calendar
+  effects, posts fresh messages + buzz, and autosaves (slot 0). Manual
+  slots 1–3 via the Save panel. Saves are DELTAS only (Section 15.2):
+  only fields differing from defaults are stored; NPC positions are NOT
+  stored — on load, NPCs are re-placed by timetable for the restored
+  day/time, so loaded worlds stay consistent.
+- ✅ Phone (Tab): Messages, Campus Buzz, Calendar (timetable + upcoming
+  events + assignments), Map (zone list + quest note), Wallet (money,
+  earnings, stats, skills), Jobs (all four jobs + shift status).
+  Mission-style popups on quest start/complete; NPC-initiated messages
+  (every 75–120 s a random main messages + shows a speech bubble if near).
+- ✅ Semester calendar events: 13 events (Orientation → Results Day)
+  delivered as Admin messages on the day and listed on the phone calendar.
+- ✅ GTA-style pack: circular minimap (bottom-right, north-up, NPC blips
+  by type, player wedge) with a yellow-diamond quest waypoint, a bobbing
+  3D quest marker in-world, and a 5-quest orientation chain
+  (meet teacher → attend lecture → study → first shift → sleep & save).
+- ✅ Section 19.1 teachers: all 9 as fully scheduled working NPCs on the
+  same AStar/pathfinding system (gold labels): Prof. Raghavan (CS),
+  Dr. Mehta (Medicine), Prof. Qureshi (Law), Prof. Banerjee (Literature),
+  Dr. Kapoor (Business), Prof. D'Souza (Fine Arts), Prof. Nair
+  (Engineering), Dr. Rao (Psychology), Prof. Fernandes (Architecture).
+  They lecture in their blocks, hold office hours in their offices, eat
+  at lunch, and leave via the gate in the evening.
+- ✅ Section 19.2 dialogue overhaul: 200 authored mains lines (10
+  characters × 4 topics × 5 lines) + 108 teacher lines (9 × 3 topics ×
+  4 lines), each written in that character's own voice around their own
+  major/friends/habits; topic buttons (Classes / Fest & events / Gossip /
+  Personal); no-repeat-until-bank-exhausted picking per character per
+  topic; location/time context prefixes (library night, lunch rush, quad
+  evening…); cross-day memory callbacks (every 3rd chat recalls a noted
+  moment; notes persist via save deltas); personal topics gated to
+  friendship ≥ 20 (teachers start at 25); the Phase 1 secret line at
+  friendship ≥ 55 is kept.
+- 🟡 Skills depth: the 5-skill framework + Study levelling are live, but
+  Sport / Music-Art / Tech / Communication have no levelling activities
+  yet (no sport/music/tech actions grant XP in Phase 2) — levelling hooks
+  for those arrive with their Phase 4 club/sport systems. Reason: no
+  Phase 2 activity exists for them; inventing one would have been
+  Phase 4 scope creep.
+- 🟡 Dialogue reactions: professor attendance/overdue remarks and quest
+  messages react to player behaviour, but NPC-initiated lines do not yet
+  reference specific player actions (e.g. "you skipped my lecture") —
+  that event-reactive layer belongs to the Phase 3 gossip/consequences
+  engine, which owns reputation effects.
+- 🟡 Acceptance evidence, partial: the mechanism for "skip a week → GPA
+  falls; study → recovers" is implemented (daily attendance penalties,
+  study/office/submit gains) and the save/load round-trip is test-proven,
+  but a multi-day week-skip was NOT sim-tested headlessly — the test
+  harness simulates one full day only. A week-scale sim belongs with the
+  Phase 4 12-week playthrough verification.
+- Acceptance (from master prompt): **PASS with the two 🟡 notes above** —
+  headless full-day sim re-run on final code: exit 0, **zero script
+  errors** (565 `Parameter "m" is null` lines are the known
+  dummy-renderer engine notices), **43/43 non-staff NPCs arrived**
+  (10 mains + 24 background + 9 teachers), day rolled over to Day 2;
+  Phase 2 test block PASS: 9 teachers in world, 3-character dialogue
+  sampling distinct (Anirudh / Zannat / Shadow on "classes"), 5 fest
+  lines for Anirudh with no repeats, save-delta round-trip OK
+  (GPA 7.26→7.32, money 500→650 restored exactly). Screenshots: 12 PNGs
+  in `preview/` re-captured from final code at 13:00, including
+  street-level avenue (shot6), character close-up with visible eyes/face
+  (shot2), HUD minimap shot (shot11: circular minimap + quest diamond +
+  GPA/major HUD), and phone shot (shot12: all 6 tabs, Messages content).
+  Exports refreshed from final code: build/windows/ CampusDays.exe
+  84,214,784 bytes + CampusDays.pck 7,793,904 bytes; build/web/
+  index.wasm 35,376,909 bytes + index.pck 7,793,888 bytes (both 2026-11-03
+  ~00:51 IST; GL Compatibility renderer — Forward+ is Phase 5).
+  Capture staging stays gated behind the existing `--capture` path only;
+  gameplay unchanged. NO Phase 3 systems started (no arcs, favours,
+  gossip engine, festivals, romance, social feed, or city-gate menu).
 
 ## Phase 3 — Stories ⏳
 

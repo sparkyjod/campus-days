@@ -11,6 +11,8 @@ extends Node3D
 var data: Dictionary = {}
 var is_main: bool = false
 var is_staff: bool = false
+var is_teacher: bool = false # Phase 2: named faculty (Section 19.1)
+var subject: String = ""
 var stationary: bool = false
 var role_line: String = ""
 
@@ -19,6 +21,10 @@ var chats: int = 0
 var compliments_today: int = 0
 var learned_hobby: bool = false
 var learned_secret: bool = false
+# Phase 2 dialogue state (persisted via save deltas, see SaveSystem):
+var dialogue_seen: Dictionary = {} # topic -> Array[int] used bank indices
+var memory_notes: Array = [] # short strings other lines can call back to
+var office_help_day: int = -1 # last day this teacher gave office-hour help
 
 var current_zone: String = "dorm"
 var target_zone: String = "dorm"

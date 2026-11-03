@@ -37,6 +37,43 @@ var paused: bool = false
 var money: int = 500
 var energy: float = 92.0
 
+# ---------------- Phase 2 state ----------------
+var gpa: float = 7.5
+var health: float = 80.0
+var stress: float = 30.0
+var social: float = 50.0
+var skills: Dictionary = {"Study": 1, "Sport": 1, "Music/Art": 1, "Tech": 1, "Communication": 1}
+var _skill_xp: Dictionary = {"Study": 0, "Sport": 0, "Music/Art": 0, "Tech": 0, "Communication": 0}
+var player_name: String = "New Student"
+var player_major: String = "Computer Science"
+var _appearance_idx: int = 0
+var _teachers: Array = []
+var _assignments: Array = []
+var _attended_keys: Array = [] # "%d_%s" % [day, period] — persisted
+var _jobs_today: Dictionary = {}
+var _jobs_total: Dictionary = {}
+var _earned_total: int = 0
+var _messages: Array = [] # {"day": int, "from": String, "text": String}
+var _buzz: Array = [] # {"day": int, "text": String}
+var _quests: Array = []
+var _quest_index: int = 0
+var _quest_marker: MeshInstance3D = null
+var _mission_timer: float = 0.0
+var _npc_msg_timer: float = 45.0
+var _qa_teacher: NPC = null
+var _qa_answer: int = 0
+var _qa_period: String = ""
+
+const ZONE_CENTERS := {
+	"dorm": Vector3(-66, 0, 18), "lecture": Vector3(-58, 0, -58),
+	"lectureb": Vector3(-104, 0, -72), "lecturec": Vector3(104, 0, -72),
+	"library": Vector3(58, 0, -58), "foodcourt": Vector3(66, 0, 18),
+	"union": Vector3(58, 0, 66), "sports": Vector3(-50, 0, 60),
+	"gate": Vector3(0, 0, 96), "admin": Vector3(-104, 0, -34),
+	"shops": Vector3(25, 0, 82), "garden": Vector3(105, 0, 55),
+	"quad": Vector3(0, 0, -5)
+}
+
 var _test_mode: bool = false
 var _capture_mode: bool = false
 var _test_start_ms: int = 0
@@ -49,6 +86,28 @@ var _hud_clock: Label
 var _hud_period: Label
 var _hud_money: Label
 var _hud_energy: ProgressBar
+var _hud_gpa: Label
+var _hud_health: ProgressBar
+var _hud_stress: ProgressBar
+var _hud_social: Label
+var _hud_objective: Label
+var _minimap: Minimap
+var _phone_panel: PanelContainer
+var _phone_text: RichTextLabel
+var _phone_tab: String = "Messages"
+var _phone_job_row: HBoxContainer
+var _save_panel: PanelContainer
+var _create_panel: PanelContainer
+var _create_name: LineEdit
+var _create_major: OptionButton
+var _create_appear: OptionButton
+var _mission_panel: PanelContainer
+var _mission_label: Label
+var _qa_panel: PanelContainer
+var _qa_question: Label
+var _qa_btns: HBoxContainer
+var _dlg_btns2: HBoxContainer
+var _dlg_office_btn: Button
 var _prompt_label: Label
 var _toast_label: Label
 var _toast_timer: float = 0.0
@@ -79,7 +138,9 @@ func _ready() -> void:
 	_lamps = _world["lamps"]
 	_spawn_player()
 	_spawn_people()
+	_spawn_teachers()
 	_build_ui()
+	_init_phase2()
 	if _test_mode:
 		Engine.time_scale = 6.0
 		speed_mult = 6.0
@@ -263,6 +324,61 @@ func _spawn_people() -> void:
 		_all_npcs.append(npc)
 		_staff.append(npc)
 
+func _spawn_teachers() -> void:
+	# Phase 2 (Section 19.1): named faculty as WORKING NPCs on the same
+	# schedule/pathfinding systems as students — never statues. They run
+	# lectures in their blocks, hold office hours (pm/club in office zone),
+	# eat at lunch, and leave via the gate in the evening.
+	for td in Phase2Data.teachers():
+		var d := {
+			"name": td["name"], "major": td["subject"], "year": 0,
+			"height": td["height"], "build": td["build"], "skin": td["skin"],
+			"hair_style": td["hair_style"], "hair_color": td["hair_color"],
+			"shirt": td["shirt"], "pants": td["pants"], "female": td["female"],
+			"backpack": false,
+			"morning": td["morning"], "am1": td["am1"], "am2": td["am2"],
+			"pm": td["pm"], "club": td["club"], "evening": td["evening"], "night": td["night"],
+			"greeting": td["greeting"], "office": td["office"], "lecture_zone": td["lecture_zone"]
+		}
+		var zone: String = _segment_for(d, 7.5)
+		var npc := _npc_common(d, false, zone, _all_npcs.size() + 1)
+		npc.is_teacher = true
+		npc.subject = str(td["subject"])
+		npc.friendship = 25
+		npc._label.modulate = Color(1.0, 0.85, 0.35) # gold labels mark faculty
+		_teachers.append(npc)
+
+func _init_phase2() -> void:
+	# Assignments from templates; quest chain; welcome messages.
+	_assignments = []
+	for t in Phase2Data.assignment_templates():
+		_assignments.append({"title": t["title"], "subject": t["subject"], "due_day": t["due_day"], "desc": t["desc"], "progress": 0, "submitted": false})
+	_quests = [
+		{"id": "meet_teacher", "title": "Orientation: talk to a teacher", "desc": "Find any professor on campus and introduce yourself.", "target_zone": "teacher", "done": false},
+		{"id": "attend_lecture", "title": "Attend a lecture", "desc": "Go to a lecture block during lecture hours and attend.", "target_zone": "lecture", "done": false},
+		{"id": "study_session", "title": "Library study session", "desc": "Study in the Central Library (bring a friend for bonus progress).", "target_zone": "library", "done": false},
+		{"id": "job_shift", "title": "First part-time shift", "desc": "Work any part-time job: library, canteen, tutoring or freelance.", "target_zone": "library", "done": false},
+		{"id": "sleep_save", "title": "Sleep and save", "desc": "Sleep in your dorm room. The game autosaves at every sleep.", "target_zone": "dorm", "done": false}
+	]
+	_quest_index = 0
+	_apply_major(player_major) # sets quest lecture target + assignment subjects
+	_add_message("Northbridge Admin", "Welcome to Northbridge University! Orientation is today. Your lecture block and professor are on the phone calendar (Tab).")
+	_add_message("Prof. Raghavan", "This is a reminder to all first-years: lectures start on the minute. See you in class.")
+	_buzz.append({"day": 1, "text": "Northbridge Buzz is live! Post updates appear here as campus life happens."})
+	if _test_mode or _capture_mode:
+		return # defaults only; no creation panel in automated runs
+	_player.controls_locked = true
+	_create_panel.visible = true
+	_show_mission("Welcome to Northbridge!", "Create your student: name, major and look — then start your semester.")
+
+func _apply_major(major: String) -> void:
+	player_major = major
+	var info := Phase2Data.major_info(major)
+	if _quests.size() > 1:
+		_quests[1]["target_zone"] = str(info["block"])
+	for a in _assignments:
+		a["subject"] = str(info["subjects"][0])
+
 func _segment_for(data: Dictionary, hour: float) -> String:
 	if hour < 9.0:
 		return str(data.get("morning", "dorm"))
@@ -337,18 +453,26 @@ func _process(delta: float) -> void:
 		game_minutes += delta * speed_mult
 		energy = maxf(0.0, energy - delta * speed_mult * (3.2 / 60.0))
 		if game_minutes >= 1440.0:
-			game_minutes = 360.0
-			day += 1
-			energy = 85.0
-			for n in _mains:
-				(n as NPC).compliments_today = 0
-			_show_toast("Day %d — a new morning at Northbridge. (Full sleep/save arrives in Phase 2.)" % day)
+			_advance_day()
 			if _test_mode:
 				_finish_test()
 				return
 	_update_sun()
 	_update_schedules()
 	_update_interaction_prompt()
+	# Phase 2 ambient systems (normal play only)
+	if _mission_timer > 0.0:
+		_mission_timer -= delta
+		if _mission_timer <= 0.0 and _mission_panel != null:
+			_mission_panel.visible = false
+	if not _test_mode and not _capture_mode and not paused:
+		_npc_msg_timer -= delta
+		if _npc_msg_timer <= 0.0:
+			_npc_msg_timer = _rng.randf_range(75.0, 120.0)
+			_npc_initiated()
+	if _quest_marker != null and _quest_index < _quests.size():
+		var qp := _quest_target_pos()
+		_quest_marker.global_position = Vector3(qp.x, 3.2 + sin(Time.get_ticks_msec() / 500.0) * 0.4, qp.z)
 	_player.speed_factor = 0.55 if energy <= 5.0 else 1.0
 	if _chat_cooldown > 0.0:
 		_chat_cooldown -= delta
@@ -379,7 +503,74 @@ func _finish_test() -> void:
 	print("[TEST_PASS] Day rolled over to Day ", day, ". Mains=", _mains.size(), " BG=", _bgs.size(), " NPCs that physically arrived at scheduled zones during test: ", arrived)
 	for n in _mains:
 		print("[TEST_MAIN] ", (n as NPC).data["name"], " zone=", (n as NPC).target_zone)
-	get_tree().quit(0)
+	var p2_ok := _run_phase2_tests()
+	get_tree().quit(0 if p2_ok else 1)
+
+func _run_phase2_tests() -> bool:
+	# Phase 2 headless evidence: teachers present, dialogue sampling
+	# (3 different characters, same topic — lines must be distinct),
+	# stats mutation, and a save-delta round-trip.
+	var ok := true
+	print("[TEST_P2] Teachers in world: ", _teachers.size())
+	for t in _teachers:
+		print("[TEST_P2_TEACHER] ", (t as NPC).data["name"], " subject=", (t as NPC).subject, " zone=", (t as NPC).target_zone)
+	if _teachers.size() < 9:
+		print("[TEST_P2_FAIL] expected 9 teachers")
+		ok = false
+	# Dialogue sampling: Anirudh, Zannat, Shadow on "classes".
+	var sample_names := ["Anirudh", "Zannat", "Shadow"]
+	var sample_lines: Array = []
+	for nm in sample_names:
+		for n in _mains:
+			var npc := n as NPC
+			if str(npc.data["name"]) == nm:
+				var line := Dialogue.pick_line(npc, "classes", npc.target_zone, 10.0, day)
+				sample_lines.append(line)
+				print("[TEST_P2_DIALOGUE] ", nm, " classes: ", line)
+	if sample_lines.size() == 3 and (sample_lines[0] == sample_lines[1] or sample_lines[1] == sample_lines[2] or sample_lines[0] == sample_lines[2]):
+		print("[TEST_P2_FAIL] sampled dialogue lines are interchangeable between characters")
+		ok = false
+	else:
+		print("[TEST_P2_DIALOGUE] distinct across 3 characters: OK")
+	# No-repeat check: 5 consecutive classes lines for one character differ.
+	var ani: NPC = _mains[0]
+	var seen_lines: Array = []
+	for i in range(5):
+		seen_lines.append(Dialogue.pick_line(ani, "fest", "quad", 12.0, day))
+	var dup := false
+	for i in range(seen_lines.size()):
+		for j in range(i + 1, seen_lines.size()):
+			if seen_lines[i] == seen_lines[j]:
+				dup = true
+	if dup:
+		print("[TEST_P2_FAIL] repeated dialogue line within one bank cycle")
+		ok = false
+	else:
+		print("[TEST_P2_DIALOGUE] 5 fest lines for Anirudh, no repeats: OK")
+	# Stats mutation + save round-trip (slot 3, test-only).
+	var gpa_before := gpa
+	var money_before := money
+	gpa = minf(10.0, gpa + 0.06)
+	money += 150
+	_jobs_total["library"] = int(_jobs_total.get("library", 0)) + 1
+	var saved := SaveSystem.save(3, _collect_state())
+	gpa = 0.0
+	money = 0
+	var loaded := SaveSystem.load_slot(3)
+	if not saved or loaded.is_empty():
+		print("[TEST_P2_FAIL] save/load round-trip failed")
+		ok = false
+	else:
+		_apply_state(loaded)
+		print("[TEST_P2_SAVE] round-trip: gpa=", gpa, " money=", money, " day=", day, " quest_index=", _quest_index)
+		if absf(gpa - (gpa_before + 0.06)) > 0.001 or money != money_before + 150:
+			print("[TEST_P2_FAIL] loaded state does not match saved state")
+			ok = false
+		else:
+			print("[TEST_P2_SAVE] delta round-trip: OK")
+	print("[TEST_P2] stats: GPA=", gpa, " health=", health, " stress=", stress, " social=", social, " quests=", _quests.size(), " assignments=", _assignments.size(), " messages=", _messages.size())
+	print("[TEST_P2] RESULT: ", "PASS" if ok else "FAIL")
+	return ok
 
 func _clock_str() -> String:
 	var h := int(game_minutes) / 60
@@ -454,8 +645,38 @@ func _update_interaction_prompt() -> void:
 	if _interact_npc != null:
 		_interact_kind = "npc"
 		_prompt_label.text = "[E] Talk to %s" % _interact_npc.data["name"]
-	else:
-		_prompt_label.text = ""
+		return
+	# Phase 2 zone activities (only when no NPC is in talk range)
+	var zone := _player_zone()
+	var hour := game_minutes / 60.0
+	var period := _lecture_period(hour)
+	if zone == "dorm":
+		_interact_kind = "sleep"
+		_prompt_label.text = "[E] Sleep — end the day (autosaves)"
+		return
+	if (zone == "lecture" or zone == "lectureb" or zone == "lecturec") and period != "":
+		_interact_kind = "lecture"
+		_prompt_label.text = "[E] Attend lecture (%s)" % period
+		return
+	if zone == "library":
+		var cur := _current_assignment()
+		if cur != null and int(cur["progress"]) >= 100 and not bool(cur["submitted"]):
+			_interact_kind = "submit"
+			_prompt_label.text = "[E] Submit assignment: %s" % str(cur["title"])
+			return
+		var friend := _nearby_main(12.0)
+		if friend != null:
+			_interact_kind = "groupstudy"
+			_prompt_label.text = "[E] Group study with %s (bonus progress)" % str(friend.data["name"])
+		else:
+			_interact_kind = "study"
+			_prompt_label.text = "[E] Study session (library)"
+		return
+	if zone == "foodcourt" and hour >= 12.0 and hour < 15.0:
+		_interact_kind = "job_canteen"
+		_prompt_label.text = "[E] Canteen shift — help Mr. Khan (₹120)"
+		return
+	_prompt_label.text = ""
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and _current_npc == null and not _capture_mode:
@@ -466,20 +687,47 @@ func _input(event: InputEvent) -> void:
 		if k == KEY_ESCAPE:
 			if _current_npc != null:
 				_close_dialogue()
+			elif _phone_panel != null and _phone_panel.visible:
+				_phone_panel.visible = false
+			elif _save_panel != null and _save_panel.visible:
+				_save_panel.visible = false
+			elif _qa_panel != null and _qa_panel.visible:
+				_qa_panel.visible = false
 			elif _class_panel.visible:
 				_class_panel.visible = false
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		elif k == KEY_E:
 			if _current_npc != null:
 				_close_dialogue()
+			elif _qa_panel != null and _qa_panel.visible:
+				pass # answer with the buttons, not E
 			elif _interact_kind == "counter":
 				_buy_counter()
 			elif _interact_kind == "chai":
 				_buy_chai()
+			elif _interact_kind == "lecture":
+				_attend_lecture()
+			elif _interact_kind == "study" or _interact_kind == "groupstudy":
+				_do_study(_interact_kind == "groupstudy")
+			elif _interact_kind == "submit":
+				_do_submit()
+			elif _interact_kind == "sleep":
+				_do_sleep()
+			elif _interact_kind == "job_canteen":
+				_do_job("canteen")
 			elif _interact_kind == "npc" and _interact_npc != null:
 				_open_dialogue(_interact_npc)
 		elif k == KEY_C and not _capture_mode:
 			_class_panel.visible = not _class_panel.visible
+		elif (k == KEY_TAB or k == KEY_P) and not _capture_mode:
+			if _phone_panel != null:
+				_phone_panel.visible = not _phone_panel.visible
+				if _phone_panel.visible:
+					_set_phone_tab(_phone_tab)
+		elif k == KEY_M and not _capture_mode:
+			if _phone_panel != null:
+				_phone_panel.visible = true
+				_set_phone_tab("Map")
 
 func _buy_counter() -> void:
 	var hour := game_minutes / 60.0
@@ -526,45 +774,108 @@ func _open_dialogue(npc: NPC) -> void:
 	_player.controls_locked = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_dialog_panel.visible = true
-	_dlg_title.text = "%s — %s, Year %s" % [npc.data["name"], npc.data.get("major", ""), str(npc.data.get("year", ""))]
+	if npc.is_teacher:
+		_dlg_title.text = "%s — %s" % [npc.data["name"], npc.subject]
+	else:
+		_dlg_title.text = "%s — %s, Year %s" % [npc.data["name"], npc.data.get("major", ""), str(npc.data.get("year", ""))]
 	for b in _dlg_btns.get_children():
-		(b as Button).visible = npc.is_main
-	if npc.is_main:
+		(b as Button).visible = npc.is_main or npc.is_teacher
+	if _dlg_btns2 != null:
+		_dlg_btns2.visible = npc.is_main or npc.is_teacher
+		for b in _dlg_btns2.get_children():
+			var btn := b as Button
+			if btn == _dlg_office_btn:
+				btn.visible = npc.is_teacher
+				btn.disabled = npc.is_teacher and npc.office_help_day == day
+			else:
+				btn.visible = true
+	if npc.is_main or npc.is_teacher:
 		_dlg_text.text = "%s\n\n%s" % [npc.data.get("personality", ""), _pick_chat_line(npc)]
 	else:
 		_dlg_text.text = str(npc.data.get("greeting", "Hello!"))
 	_update_dlg_friend()
+	if npc.is_teacher:
+		_complete_quest_if("meet_teacher")
 
 func _pick_chat_line(npc: NPC) -> String:
+	# Phase 2: route mains + teachers through the Dialogue engine
+	# (topic-rotating, context-aware, no repeats until the bank cycles).
+	if npc.is_main or npc.is_teacher:
+		var topics := ["classes", "fest", "gossip", "personal"]
+		var topic: String = str(topics[npc.chats % topics.size()])
+		var line := Dialogue.pick_line(npc, topic, npc.target_zone, game_minutes / 60.0, day)
+		if npc.chats >= 2:
+			line = "Good to see you again. " + line
+		return line
 	var lines: Array = npc.data.get("chat", ["Hello!"])
-	var line: String = lines[npc.chats % lines.size()]
+	var line2: String = lines[npc.chats % lines.size()]
 	if npc.chats >= 2:
-		line = "Good to see you again. " + line
-	return line
+		line2 = "Good to see you again. " + line2
+	return line2
+
+func _note_memory(npc: NPC, what: String) -> void:
+	var note := "%s on Day %d" % [what, day]
+	npc.memory_notes.append(note)
+	while npc.memory_notes.size() > 8:
+		npc.memory_notes.pop_front()
 
 func _update_dlg_friend() -> void:
-	if _current_npc != null and _current_npc.is_main:
+	if _current_npc != null and (_current_npc.is_main or _current_npc.is_teacher):
 		_dlg_friend.text = "Friendship: %d / 100 — %s   •   Chats so far: %d" % [_current_npc.friendship, _tier_name(_current_npc.friendship), _current_npc.chats]
 	else:
 		_dlg_friend.text = ""
 
 func _dlg_choice(kind: String) -> void:
 	var npc := _current_npc
-	if npc == null or not npc.is_main:
+	if npc == null or (not npc.is_main and not npc.is_teacher):
+		return
+	if kind == "office":
+		if npc.office_help_day == day:
+			_dlg_text.text = "I have already helped you today. Come back tomorrow with new questions — and attempted answers."
+			return
+		npc.office_help_day = day
+		npc.friendship = mini(100, npc.friendship + 3)
+		gpa = minf(10.0, gpa + 0.05)
+		var cur := _current_assignment()
+		if cur != null and not bool(cur["submitted"]):
+			cur["progress"] = mini(100, int(cur["progress"]) + 20)
+		_dlg_text.text = "Office hours, then. %s\n\n(GPA +0.05, assignment +20 progress, friendship +3.)" % Dialogue.pick_line(npc, "career", npc.target_zone, game_minutes / 60.0, day)
+		_update_dlg_friend()
+		_refresh_hud()
 		return
 	if kind == "chat":
 		npc.chats += 1
 		npc.friendship = mini(100, npc.friendship + 2)
 		_dlg_text.text = _pick_chat_line(npc)
+		_note_memory(npc, "a chat")
+	elif kind == "topic_classes" or kind == "topic_fest" or kind == "topic_gossip" or kind == "topic_personal":
+		var topic := kind.substr(6)
+		if topic == "personal" and npc.friendship < 20:
+			# Section 19.2: personal topics unlock by friendship tier.
+			_dlg_text.text = "We have only just met — talk to me a little more first, and I will tell you the real stuff."
+			_update_dlg_friend()
+			return
+		npc.chats += 1
+		npc.friendship = mini(100, npc.friendship + 2)
+		_dlg_text.text = Dialogue.pick_line(npc, topic, npc.target_zone, game_minutes / 60.0, day)
+		_note_memory(npc, "talking about " + topic)
 	elif kind == "compliment":
 		if npc.compliments_today < 2:
 			npc.compliments_today += 1
 			npc.chats += 1
 			npc.friendship = mini(100, npc.friendship + 4)
-			_dlg_text.text = str(npc.data.get("compliment", "Thank you!"))
+			if npc.is_teacher:
+				_dlg_text.text = "A compliment from a student who attends — noted, with approval. Keep the work up, and the praise will keep meaning something."
+			else:
+				_dlg_text.text = str(npc.data.get("compliment", "Thank you!"))
 		else:
 			_dlg_text.text = "You've praised me enough for one day — I'll start suspecting you're buttering me up for notes. (Compliment limit per day reached.)"
 	elif kind == "ask":
+		if npc.is_teacher:
+			npc.chats += 1
+			_dlg_text.text = "I teach %s. My office hours are in the %s — bring questions, and bring your own attempted answers first. That is how office hours help." % [npc.subject, str(npc.data.get("office", "library"))]
+			_update_dlg_friend()
+			return
 		npc.chats += 1
 		var extra := ""
 		if not npc.learned_hobby:
@@ -586,6 +897,466 @@ func _close_dialogue() -> void:
 		_current_npc = null
 	_dialog_panel.visible = false
 	_player.controls_locked = false
+
+# ---------------- Phase 2 systems ----------------
+
+func _player_zone() -> String:
+	var pp := _player.global_position
+	var best := "outdoors"
+	var best_d := 24.0
+	for z in ZONE_CENTERS.keys():
+		var d := Vector2(pp.x, pp.z).distance_to(Vector2(ZONE_CENTERS[z].x, ZONE_CENTERS[z].z))
+		if d < best_d:
+			best_d = d
+			best = str(z)
+	if best == "outdoors":
+		# near the quad crossing but outside every building radius
+		if Vector2(pp.x, pp.z).distance_to(Vector2(0, -5)) < 34.0:
+			return "quad"
+	return best
+
+func _lecture_period(hour: float) -> String:
+	if hour >= 9.0 and hour < 11.0:
+		return "am1"
+	elif hour >= 11.0 and hour < 13.0:
+		return "am2"
+	elif hour >= 14.0 and hour < 16.0:
+		return "pm"
+	return ""
+
+func _nearby_main(dist: float) -> NPC:
+	for n in _mains:
+		var npc := n as NPC
+		if npc.global_position.distance_to(_player.global_position) < dist:
+			return npc
+	return null
+
+func _current_assignment() -> Dictionary:
+	for a in _assignments:
+		if not bool(a["submitted"]):
+			return a
+	return {}
+
+func _add_message(sender: String, text: String) -> void:
+	_messages.append({"day": day, "from": sender, "text": text})
+	while _messages.size() > 40:
+		_messages.pop_front()
+	if not _test_mode and not _capture_mode:
+		_show_toast("📱 New message from %s" % sender)
+
+func _npc_initiated() -> void:
+	# Section 19.2: characters start conversations, not just respond.
+	if _mains.is_empty():
+		return
+	var npc: NPC = _mains[_rng.randi_range(0, _mains.size() - 1)]
+	var line := Dialogue.pick_line(npc, "gossip", npc.target_zone, game_minutes / 60.0, day)
+	_add_message(str(npc.data["name"]), line)
+	if npc.global_position.distance_to(_player.global_position) < 25.0:
+		npc.show_bubble(line.substr(0, mini(90, line.length())), 4.0)
+
+func _quest_target_pos() -> Vector3:
+	if _quest_index >= _quests.size():
+		return _player.global_position
+	var q: Dictionary = _quests[_quest_index]
+	var tz := str(q["target_zone"])
+	if tz == "teacher":
+		var best: NPC = null
+		var best_d := 1e9
+		for t in _teachers:
+			var d := (t as NPC).global_position.distance_to(_player.global_position)
+			if d < best_d:
+				best_d = d
+				best = t
+		if best != null:
+			return best.global_position
+		return ZONE_CENTERS["admin"]
+	return ZONE_CENTERS.get(tz, Vector3.ZERO)
+
+func _complete_quest_if(qid: String) -> bool:
+	if _quest_index >= _quests.size():
+		return false
+	var q: Dictionary = _quests[_quest_index]
+	if str(q["id"]) != qid or bool(q["done"]):
+		return false
+	q["done"] = true
+	match qid:
+		"meet_teacher":
+			social = minf(100.0, social + 5.0)
+		"attend_lecture":
+			gpa = minf(10.0, gpa + 0.05)
+		"study_session":
+			_skill_xp["Study"] = int(_skill_xp["Study"]) + 1
+		"job_shift":
+			money += 50
+		"sleep_save":
+			money += 25
+	_show_mission("Quest complete: %s" % str(q["title"]), "Next: %s" % (_quests[_quest_index + 1]["title"] if _quest_index + 1 < _quests.size() else "Semester life continues — keep the streak going!"))
+	_quest_index += 1
+	_refresh_hud()
+	return true
+
+func _show_mission(title: String, desc: String) -> void:
+	if _mission_label == null:
+		return
+	_mission_label.text = "🎯 %s\n%s" % [title, desc]
+	_mission_panel.visible = true
+	_mission_timer = 6.0
+
+func _attend_lecture() -> void:
+	var hour := game_minutes / 60.0
+	var period := _lecture_period(hour)
+	if period == "":
+		_show_toast("No lecture right now — lectures run 09:00–11:00, 11:00–13:00 and 14:00–16:00.")
+		return
+	var key := "%d_%s" % [day, period]
+	if _attended_keys.has(key):
+		_show_toast("You already attended this lecture slot today. Revise in the library instead.")
+		return
+	var info := Phase2Data.major_info(player_major)
+	var zone := _player_zone()
+	var own_block := zone == str(info["block"])
+	var qa: Dictionary = Phase2Data.qa_questions().get(player_major, Phase2Data.qa_questions()["Computer Science"])
+	_qa_answer = int(qa["answer"])
+	_qa_period = key
+	_qa_question.text = "%s — %s\n\nQ: %s" % [str(info["subjects"][0]), ("Your lecture" if own_block else "Visiting lecture"), str(qa["q"])]
+	var opts: Array = qa["options"]
+	for i in range(3):
+		(_qa_btns.get_child(i) as Button).text = str(opts[i])
+	_qa_panel.visible = true
+	_player.controls_locked = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_show_toast("Lecture in progress… answer the question to take notes.")
+
+func _qa_answer_pressed(idx: int) -> void:
+	_qa_panel.visible = false
+	_player.controls_locked = false
+	var info := Phase2Data.major_info(player_major)
+	var zone := _player_zone()
+	var own_block := zone == str(info["block"])
+	_attended_keys.append(_qa_period)
+	energy = maxf(0.0, energy - 5.0)
+	if idx == _qa_answer:
+		gpa = minf(10.0, gpa + (0.06 if own_block else 0.03))
+		_show_toast("Correct! Notes taken, professor impressed. GPA up.")
+		_add_message(str(info["teacher"]), "Good answer in class today. Keep that standard up — and do not be late tomorrow.")
+	else:
+		gpa = minf(10.0, gpa + 0.02)
+		_show_toast("Not quite — but attending and trying still counts. Review the topic in the library.")
+	_complete_quest_if("attend_lecture")
+	_refresh_hud()
+
+func _do_study(group: bool) -> void:
+	if energy < 8.0:
+		_show_toast("Too tired to study. Eat something or rest first.")
+		return
+	energy = maxf(0.0, energy - 8.0)
+	_skill_xp["Study"] = int(_skill_xp["Study"]) + 1
+	if int(_skill_xp["Study"]) % 3 == 0 and int(skills["Study"]) < 10:
+		skills["Study"] = int(skills["Study"]) + 1
+		_show_toast("Study skill up! Now level %d." % int(skills["Study"]))
+	var cur := _current_assignment()
+	var gain := 25
+	var friend: NPC = null
+	if group:
+		friend = _nearby_main(12.0)
+		if friend != null:
+			gain = 40
+			friend.friendship = mini(100, friend.friendship + 2)
+	if cur != null and not bool(cur["submitted"]):
+		cur["progress"] = mini(100, int(cur["progress"]) + gain)
+		if int(cur["progress"]) >= 100:
+			_show_toast("Assignment complete! Submit it here in the library (E) before the deadline.")
+		else:
+			_show_toast("Study session done. Assignment progress: %d%%.%s" % [int(cur["progress"]), " Group bonus applied!" if group else ""])
+	else:
+		_show_toast("Study session done. No open assignment — GPA still benefits from revision.")
+	gpa = minf(10.0, gpa + 0.03)
+	stress = maxf(0.0, stress - 2.0)
+	_complete_quest_if("study_session")
+	_refresh_hud()
+
+func _do_submit() -> void:
+	var cur := _current_assignment()
+	if cur == null or int(cur["progress"]) < 100 or bool(cur["submitted"]):
+		_show_toast("Nothing ready to submit yet — finish it in the library first.")
+		return
+	cur["submitted"] = true
+	gpa = minf(10.0, gpa + 0.15)
+	var info := Phase2Data.major_info(player_major)
+	_add_message(str(info["teacher"]), "Received your %s. Well structured — marks after review." % str(cur["title"]))
+	_show_toast("Assignment submitted! GPA +0.15.")
+	_refresh_hud()
+
+func _do_job(job_id: String) -> void:
+	var jobs := Phase2Data.jobs()
+	if not jobs.has(job_id):
+		return
+	var job: Dictionary = jobs[job_id]
+	if bool(_jobs_today.get(job_id, false)):
+		_show_toast("You already worked this job today. Come back tomorrow.")
+		return
+	if job_id == "library" and _player_zone() != "library":
+		_show_toast("Library Assistant shifts happen in the Central Library.")
+		return
+	if job_id == "canteen" and _player_zone() != "foodcourt":
+		_show_toast("Canteen shifts happen at the Food Court.")
+		return
+	if job_id == "tutoring" and gpa < 7.0:
+		_show_toast("Tutoring needs GPA 7.0+ — juniors trust toppers. Study first!")
+		return
+	var cost := int(job["energy"])
+	if energy < float(cost):
+		_show_toast("Too tired for a shift. Rest or eat first.")
+		return
+	energy = maxf(0.0, energy - float(cost))
+	money += int(job["pay"])
+	_earned_total += int(job["pay"])
+	_jobs_today[job_id] = true
+	_jobs_total[job_id] = int(_jobs_total.get(job_id, 0)) + 1
+	stress = minf(100.0, stress + 3.0)
+	_show_toast("%s done! +₹%d. Total earned: ₹%d." % [str(job["title"]), int(job["pay"]), _earned_total])
+	_complete_quest_if("job_shift")
+	_refresh_hud()
+
+func _do_sleep() -> void:
+	if _player_zone() != "dorm":
+		_show_toast("Sleep happens in your dorm room in the Residence Hall.")
+		return
+	_complete_quest_if("sleep_save")
+	_advance_day()
+	_show_toast("Day %d — you wake up rested. Autosaved." % day)
+
+func _advance_day() -> void:
+	# Shared end-of-day logic for sleep AND the midnight rollover:
+	# attendance consequences + professor remarks, overdue assignments,
+	# calendar events, fresh messages/buzz, daily resets, autosave.
+	var weekday := (day - 1) % 7 # 0=Mon .. 4=Fri are lecture days
+	if weekday < 5:
+		var missed := 0
+		for p in ["am1", "am2", "pm"]:
+			if not _attended_keys.has("%d_%s" % [day, p]):
+				missed += 1
+		if missed > 0:
+			gpa = maxf(0.0, gpa - 0.08 * float(missed))
+			stress = minf(100.0, stress + 2.0 * float(missed))
+			var info := Phase2Data.major_info(player_major)
+			_add_message(str(info["teacher"]), "Attendance note: you missed %d lecture slot(s) today. GPA reflects attendance — see me in office hours." % missed)
+	day += 1
+	game_minutes = 360.0 # 06:00
+	energy = 95.0
+	health = minf(100.0, health + 5.0)
+	stress = maxf(0.0, stress - 10.0)
+	for n in _mains:
+		(n as NPC).compliments_today = 0
+	for t in _teachers:
+		(t as NPC).compliments_today = 0
+	_jobs_today = {}
+	# overdue assignments
+	for a in _assignments:
+		if not bool(a["submitted"]) and int(a["due_day"]) < day:
+			if not bool(a.get("penalised", false)):
+				a["penalised"] = true
+				gpa = maxf(0.0, gpa - 0.30)
+				var info2 := Phase2Data.major_info(player_major)
+				_add_message(str(info2["teacher"]), "Overdue: %s was due Day %d. Late penalty applied (-0.30 GPA). Submit it now to stop further damage." % [str(a["title"]), int(a["due_day"])])
+	# today's calendar event, if any
+	for ev in Phase2Data.calendar_events():
+		if int(ev["day"]) == day:
+			_add_message("Northbridge Admin", "Today: %s — %s" % [str(ev["title"]), str(ev["desc"])])
+	# fresh NPC messages + buzz (deterministic rotation, no repeats spam)
+	if not _mains.is_empty():
+		var n1: NPC = _mains[(day * 2) % _mains.size()]
+		var n2: NPC = _mains[(day * 2 + 3) % _mains.size()]
+		_add_message(str(n1.data["name"]), Dialogue.pick_line(n1, "gossip", n1.target_zone, 9.0, day))
+		_add_message(str(n2.data["name"]), Dialogue.pick_line(n2, "fest", n2.target_zone, 9.0, day))
+	var buzz_tpl: Array = Phase2Data.buzz_templates()
+	var bname := str(_mains[(day * 3) % _mains.size()].data["name"]) if not _mains.is_empty() else "Campus"
+	_buzz.append({"day": day, "text": str(buzz_tpl[day % buzz_tpl.size()]).replace("{name}", bname)})
+	if not _test_mode and not _capture_mode:
+		SaveSystem.save(0, _collect_state())
+	_refresh_hud()
+
+# ---------------- Phase 2 save / state ----------------
+
+func _collect_state() -> Dictionary:
+	var fr: Dictionary = {}
+	var mem: Dictionary = {}
+	var seen: Dictionary = {}
+	for n in _mains + _teachers:
+		var npc := n as NPC
+		fr[str(npc.data["name"])] = npc.friendship
+		if not npc.memory_notes.is_empty():
+			mem[str(npc.data["name"])] = npc.memory_notes.duplicate()
+		if not npc.dialogue_seen.is_empty():
+			seen[str(npc.data["name"])] = npc.dialogue_seen.duplicate(true)
+	var msgs: Array = []
+	for m in _messages:
+		msgs.append(m.duplicate())
+	var bz: Array = []
+	for b in _buzz:
+		bz.append(b.duplicate())
+	var asg: Array = []
+	for a in _assignments:
+		asg.append(a.duplicate())
+	return {
+		"version": 1, "day": day, "game_minutes": game_minutes,
+		"player_name": player_name, "player_major": player_major, "appearance": _appearance_idx,
+		"money": money, "energy": energy, "gpa": gpa, "health": health,
+		"stress": stress, "social": social, "skills": skills.duplicate(),
+		"friendships": fr, "memories": mem, "dialogue_seen": seen,
+		"assignments": asg, "attended": _attended_keys.duplicate(),
+		"jobs_done_day": _jobs_today.duplicate(), "jobs_done_total": _jobs_total.duplicate(),
+		"quest_index": _quest_index, "messages": msgs, "buzz": bz
+	}
+
+func _apply_state(state: Dictionary) -> void:
+	if state.is_empty():
+		return
+	day = int(state.get("day", 1))
+	game_minutes = float(state.get("game_minutes", 450.0))
+	player_name = str(state.get("player_name", player_name))
+	_appearance_idx = int(state.get("appearance", 0))
+	money = int(state.get("money", 500))
+	energy = float(state.get("energy", 92.0))
+	gpa = float(state.get("gpa", 7.5))
+	health = float(state.get("health", 80.0))
+	stress = float(state.get("stress", 30.0))
+	social = float(state.get("social", 50.0))
+	var sk: Dictionary = state.get("skills", {})
+	for k in sk.keys():
+		skills[k] = sk[k]
+	var fr: Dictionary = state.get("friendships", {})
+	var mem: Dictionary = state.get("memories", {})
+	var seen: Dictionary = state.get("dialogue_seen", {})
+	for n in _mains + _teachers:
+		var npc := n as NPC
+		var nm := str(npc.data["name"])
+		if fr.has(nm):
+			npc.friendship = int(fr[nm])
+		if mem.has(nm):
+			npc.memory_notes = (mem[nm] as Array).duplicate()
+		if seen.has(nm):
+			npc.dialogue_seen = (seen[nm] as Dictionary).duplicate(true)
+	var asg: Array = state.get("assignments", [])
+	if not asg.is_empty():
+		_assignments = []
+		for a in asg:
+			_assignments.append((a as Dictionary).duplicate())
+	_attended_keys = (state.get("attended", []) as Array).duplicate()
+	_jobs_today = (state.get("jobs_done_day", {}) as Dictionary).duplicate()
+	_jobs_total = (state.get("jobs_done_total", {}) as Dictionary).duplicate()
+	_quest_index = int(state.get("quest_index", 0))
+	_messages = []
+	for m in state.get("messages", []):
+		_messages.append((m as Dictionary).duplicate())
+	_buzz = []
+	for b in state.get("buzz", []):
+		_buzz.append((b as Dictionary).duplicate())
+	_apply_major(player_major)
+	# Re-place every non-staff NPC by timetable for the restored time
+	# (delta saves store no positions — this keeps loads consistent).
+	var hour := game_minutes / 60.0
+	for n in _all_npcs:
+		var npc := n as NPC
+		if npc.is_staff or npc.talking:
+			continue
+		var zone := _segment_for(npc.data, hour)
+		var idx := _all_npcs.find(npc)
+		var spot: Vector3 = _pick_spot(npc, zone, idx)
+		npc.global_position = spot
+		npc.spot = spot
+		npc.target_zone = zone
+		npc.set_path([])
+	# Rebuild the player model for a restored appearance choice.
+	var presets := Phase2Data.appearance_presets()
+	if _appearance_idx >= 0 and _appearance_idx < presets.size():
+		var pr: Dictionary = presets[_appearance_idx]
+		_player.apply_appearance({"height": 1.74, "build": 1.0, "skin": pr["skin"], "hair_style": pr["hair_style"], "hair_color": Color(0.07, 0.05, 0.04), "shirt": pr["shirt"], "pants": Color(0.20, 0.22, 0.35), "female": pr["female"], "backpack": true, "pack_color": Color(0.25, 0.25, 0.28)})
+	_refresh_hud()
+	_refresh_classmates()
+
+func _save_slot_pressed(slot: int) -> void:
+	if SaveSystem.save(slot, _collect_state()):
+		_show_toast("Saved to slot %d." % slot)
+	else:
+		_show_toast("Save failed — could not write slot %d." % slot)
+
+func _load_slot_pressed(slot: int) -> void:
+	if not SaveSystem.slot_exists(slot):
+		_show_toast("Slot %d is empty." % slot)
+		return
+	_apply_state(SaveSystem.load_slot(slot))
+	_show_toast("Loaded slot %d — Day %d." % [slot, day])
+
+func _create_start_pressed() -> void:
+	var nm := _create_name.text.strip_edges()
+	if nm != "":
+		player_name = nm
+	var majors := Phase2Data.majors()
+	player_major = majors[_create_major.selected]
+	_appearance_idx = _create_appear.selected
+	var pr: Dictionary = Phase2Data.appearance_presets()[_appearance_idx]
+	_player.apply_appearance({"height": 1.74, "build": 1.0, "skin": pr["skin"], "hair_style": pr["hair_style"], "hair_color": Color(0.07, 0.05, 0.04), "shirt": pr["shirt"], "pants": Color(0.20, 0.22, 0.35), "female": pr["female"], "backpack": true, "pack_color": Color(0.25, 0.25, 0.28)})
+	_apply_major(player_major)
+	_create_panel.visible = false
+	_player.controls_locked = false
+	_show_mission("Semester started!", "%s — %s. Your lectures are in %s with %s. Check your phone (Tab)." % [player_name, player_major, str(Phase2Data.major_info(player_major)["block_name"]), str(Phase2Data.major_info(player_major)["teacher"])])
+	_add_message("Northbridge Admin", "Student record created: %s, %s. Good luck this semester!" % [player_name, player_major])
+	_refresh_hud()
+
+# ---------------- Phase 2 phone ----------------
+
+func _set_phone_tab(tab: String) -> void:
+	_phone_tab = tab
+	_phone_job_row.visible = (tab == "Jobs")
+	_phone_text.text = _phone_text_for(tab)
+
+func _phone_text_for(tab: String) -> String:
+	match tab:
+		"Messages":
+			if _messages.is_empty():
+				return "No messages yet. Characters message you about real events — talk to people and sleep to advance days."
+			var out := ""
+			for m in _messages:
+				out += "Day %d — %s:\n%s\n\n" % [int(m["day"]), str(m["from"]), str(m["text"])]
+			return out
+		"Buzz":
+			if _buzz.is_empty():
+				return "Campus Buzz is quiet. It fills up as days pass."
+			var out2 := "CAMPUS BUZZ — what campus is posting:\n\n"
+			for b in _buzz:
+				out2 += "Day %d: %s\n\n" % [int(b["day"]), str(b["text"])]
+			return out2
+		"Calendar":
+			var info := Phase2Data.major_info(player_major)
+			var out3 := "%s — %s\nTimetable (Mon–Fri):\n09:00 Lecture, %s (%s)\n11:00 Seminar / Lab\n13:00 Lunch\n14:00 Lecture / Seminar\n16:00 Clubs & office hours\n\nUpcoming events:\n" % [player_name, player_major, str(info["block_name"]), str(info["teacher"])]
+			var shown := 0
+			for ev in Phase2Data.calendar_events():
+				if int(ev["day"]) >= day and shown < 8:
+					out3 += "Day %d: %s — %s\n" % [int(ev["day"]), str(ev["title"]), str(ev["desc"])]
+					shown += 1
+			out3 += "\nAssignments:\n"
+			for a in _assignments:
+				out3 += "- %s (due Day %d): %d%% %s\n" % [str(a["title"]), int(a["due_day"]), int(a["progress"]), "SUBMITTED" if bool(a["submitted"]) else ""]
+			return out3
+		"Map":
+			var out4 := "CAMPUS MAP — you are in: %s\n\n" % _player_zone()
+			for z in ZONE_NAMES.keys():
+				out4 += "- %s\n" % ZONE_NAMES[z]
+			out4 += "\nYellow diamond on the minimap (bottom-right) = your current quest target."
+			if _quest_index < _quests.size():
+				out4 += "\nCurrent quest: %s" % str(_quests[_quest_index]["title"])
+			return out4
+		"Wallet":
+			return "WALLET\nMoney: ₹%d\nTotal earned from jobs: ₹%d\n\nSTATS\nGPA: %.2f / 10\nHealth: %d\nStress: %d\nSocial: %d\nEnergy: %d\n\nSKILLS\nStudy %d • Sport %d • Music/Art %d • Tech %d • Communication %d" % [money, _earned_total, gpa, int(health), int(stress), int(social), int(energy), int(skills["Study"]), int(skills["Sport"]), int(skills["Music/Art"]), int(skills["Tech"]), int(skills["Communication"])]
+		"Jobs":
+			var out5 := "PART-TIME JOBS (one shift per job per day):\n\n"
+			for jid in Phase2Data.jobs().keys():
+				var j: Dictionary = Phase2Data.jobs()[jid]
+				out5 += "%s — ₹%d, %s. Done today: %s. Total shifts: %d\n" % [str(j["title"]), int(j["pay"]), str(j["where"]), "yes" if bool(_jobs_today.get(jid, false)) else "no", int(_jobs_total.get(jid, 0))]
+			out5 += "\nTap a job button below to work it (location jobs need you to be there)."
+			return out5
+	return ""
 
 # ---------------- UI ----------------
 
@@ -626,6 +1397,33 @@ func _build_ui() -> void:
 	_hud_energy.custom_minimum_size = Vector2(150, 16)
 	erow.add_child(_hud_energy)
 	vb.add_child(erow)
+	# Phase 2 HUD: GPA / health / stress / social / objective
+	_hud_gpa = _mk_label("GPA 7.50 / 10", 18, Color(1.0, 0.9, 0.5))
+	vb.add_child(_hud_gpa)
+	var hrow := HBoxContainer.new()
+	hrow.add_child(_mk_label("Health", 16))
+	_hud_health = ProgressBar.new()
+	_hud_health.min_value = 0
+	_hud_health.max_value = 100
+	_hud_health.value = health
+	_hud_health.custom_minimum_size = Vector2(150, 14)
+	hrow.add_child(_hud_health)
+	vb.add_child(hrow)
+	var srow := HBoxContainer.new()
+	srow.add_child(_mk_label("Stress", 16))
+	_hud_stress = ProgressBar.new()
+	_hud_stress.min_value = 0
+	_hud_stress.max_value = 100
+	_hud_stress.value = stress
+	_hud_stress.custom_minimum_size = Vector2(150, 14)
+	srow.add_child(_hud_stress)
+	vb.add_child(srow)
+	_hud_social = _mk_label("Social 50", 16, Color(0.8, 0.9, 1.0))
+	vb.add_child(_hud_social)
+	_hud_objective = _mk_label("🎯 Orientation: talk to a teacher", 15, Color(1.0, 0.85, 0.3))
+	_hud_objective.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_hud_objective.custom_minimum_size = Vector2(280, 0)
+	vb.add_child(_hud_objective)
 	# top-right buttons
 	var bb := HBoxContainer.new()
 	bb.set_anchors_preset(Control.PRESET_TOP_RIGHT)
@@ -648,6 +1446,14 @@ func _build_ui() -> void:
 	b_3x.text = "3x"
 	b_3x.pressed.connect(func() -> void: speed_mult = 3.0; paused = false)
 	bb.add_child(b_3x)
+	var b_phone := Button.new()
+	b_phone.text = "📱 Phone (Tab)"
+	b_phone.pressed.connect(func() -> void: _phone_panel.visible = not _phone_panel.visible; if _phone_panel.visible: _set_phone_tab(_phone_tab))
+	bb.add_child(b_phone)
+	var b_save := Button.new()
+	b_save.text = "💾 Save"
+	b_save.pressed.connect(func() -> void: _save_panel.visible = not _save_panel.visible)
+	bb.add_child(b_save)
 	# help / prompt / toast
 	var help := _mk_label("WASD move • Mouse look (click to capture) • Shift run • E talk/buy • C classmates • Esc release mouse", 15, Color(0.9, 0.9, 0.9))
 	help.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
@@ -685,6 +1491,12 @@ func _build_ui() -> void:
 		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		l.custom_minimum_size = Vector2(320, 0)
 		_class_box.add_child(l)
+	_class_box.add_child(_mk_label("FACULTY (Phase 2)", 17, Color(1.0, 0.85, 0.35)))
+	for t in _teachers:
+		var tl := _mk_label("%s — %s" % [str((t as NPC).data["name"]), (t as NPC).subject], 15, Color(1.0, 0.9, 0.6))
+		tl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		tl.custom_minimum_size = Vector2(320, 0)
+		_class_box.add_child(tl)
 	# dialogue panel
 	_dialog_panel = PanelContainer.new()
 	_dialog_panel.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
@@ -723,6 +1535,160 @@ func _build_ui() -> void:
 	b_close.text = "Close (E)"
 	b_close.pressed.connect(func() -> void: _close_dialogue())
 	_dlg_btns.add_child(b_close)
+	# Phase 2 dialogue second row: topic buttons + office hours (teachers)
+	_dlg_btns2 = HBoxContainer.new()
+	_dlg_btns2.add_theme_constant_override("separation", 8)
+	dv.add_child(_dlg_btns2)
+	for spec in [["topic_classes", "📚 Classes"], ["topic_fest", "🎉 Fest & events"], ["topic_gossip", "🗣️ Gossip"], ["topic_personal", "💛 Personal"]]:
+		var tb := Button.new()
+		tb.text = spec[1]
+		# bind (not a lambda): loop-variable capture would give every
+		# button the last topic.
+		tb.pressed.connect(_dlg_choice.bind(str(spec[0])))
+		_dlg_btns2.add_child(tb)
+	_dlg_office_btn = Button.new()
+	_dlg_office_btn.text = "🎓 Office hours help"
+	_dlg_office_btn.pressed.connect(func() -> void: _dlg_choice("office"))
+	_dlg_btns2.add_child(_dlg_office_btn)
+	# ---- Phone panel (Tab) ----
+	_phone_panel = PanelContainer.new()
+	_phone_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_phone_panel.position = Vector2(-310, -290)
+	_phone_panel.custom_minimum_size = Vector2(620, 580)
+	_phone_panel.visible = false
+	layer.add_child(_phone_panel)
+	var pv := VBoxContainer.new()
+	_phone_panel.add_child(pv)
+	pv.add_child(_mk_label("📱 PHONE — Northbridge Campus", 20, Color(1.0, 0.95, 0.7)))
+	var tabrow := HBoxContainer.new()
+	pv.add_child(tabrow)
+	for tab in ["Messages", "Buzz", "Calendar", "Map", "Wallet", "Jobs"]:
+		var tb2 := Button.new()
+		tb2.text = tab
+		tb2.pressed.connect(_set_phone_tab.bind(tab))
+		tabrow.add_child(tb2)
+	_phone_text = RichTextLabel.new()
+	_phone_text.fit_content = false
+	_phone_text.custom_minimum_size = Vector2(580, 380)
+	_phone_text.add_theme_font_size_override("normal_font_size", 16)
+	_phone_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	pv.add_child(_phone_text)
+	_phone_job_row = HBoxContainer.new()
+	pv.add_child(_phone_job_row)
+	for jid in ["library", "canteen", "tutoring", "freelance"]:
+		var jb := Button.new()
+		jb.text = str(Phase2Data.jobs()[jid]["title"])
+		jb.pressed.connect(_do_job.bind(jid))
+		_phone_job_row.add_child(jb)
+	_phone_job_row.visible = false
+	# ---- Save / Load panel ----
+	_save_panel = PanelContainer.new()
+	_save_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_save_panel.position = Vector2(-200, -180)
+	_save_panel.custom_minimum_size = Vector2(400, 360)
+	_save_panel.visible = false
+	layer.add_child(_save_panel)
+	var sv := VBoxContainer.new()
+	_save_panel.add_child(sv)
+	sv.add_child(_mk_label("💾 SAVE / LOAD (autosave runs at every sleep)", 17, Color(1.0, 0.95, 0.7)))
+	for slot in [1, 2, 3]:
+		var srow2 := HBoxContainer.new()
+		var sb := Button.new()
+		sb.text = "Save slot %d" % slot
+		sb.pressed.connect(_save_slot_pressed.bind(slot))
+		srow2.add_child(sb)
+		var lb := Button.new()
+		lb.text = "Load slot %d" % slot
+		lb.pressed.connect(_load_slot_pressed.bind(slot))
+		srow2.add_child(lb)
+		sv.add_child(srow2)
+	var svclose := Button.new()
+	svclose.text = "Close"
+	svclose.pressed.connect(func() -> void: _save_panel.visible = false)
+	sv.add_child(svclose)
+	# ---- Character creation panel (normal play only) ----
+	_create_panel = PanelContainer.new()
+	_create_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_create_panel.position = Vector2(-280, -240)
+	_create_panel.custom_minimum_size = Vector2(560, 480)
+	_create_panel.visible = false
+	layer.add_child(_create_panel)
+	var cv := VBoxContainer.new()
+	cv.add_theme_constant_override("separation", 8)
+	_create_panel.add_child(cv)
+	cv.add_child(_mk_label("🎓 CREATE YOUR STUDENT — Northbridge University", 20, Color(1.0, 0.95, 0.7)))
+	cv.add_child(_mk_label("Your name:", 16))
+	_create_name = LineEdit.new()
+	_create_name.placeholder_text = "e.g. Aarav Sharma"
+	_create_name.custom_minimum_size = Vector2(500, 32)
+	cv.add_child(_create_name)
+	cv.add_child(_mk_label("Your major (decides your lecture block + professor):", 16))
+	_create_major = OptionButton.new()
+	for m in Phase2Data.majors():
+		_create_major.add_item(m)
+	cv.add_child(_create_major)
+	cv.add_child(_mk_label("Appearance:", 16))
+	_create_appear = OptionButton.new()
+	for pr in Phase2Data.appearance_presets():
+		_create_appear.add_item(str(pr["label"]))
+	cv.add_child(_create_appear)
+	var start_btn := Button.new()
+	start_btn.text = "▶ Start Semester"
+	start_btn.pressed.connect(func() -> void: _create_start_pressed())
+	cv.add_child(start_btn)
+	# ---- Mission popup (GTA-style quest popups) ----
+	_mission_panel = PanelContainer.new()
+	_mission_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_mission_panel.position = Vector2(-320, 90)
+	_mission_panel.custom_minimum_size = Vector2(640, 90)
+	_mission_panel.visible = false
+	layer.add_child(_mission_panel)
+	var mv := VBoxContainer.new()
+	_mission_panel.add_child(mv)
+	_mission_label = _mk_label("", 18, Color(1.0, 0.9, 0.4))
+	_mission_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_mission_label.custom_minimum_size = Vector2(620, 0)
+	mv.add_child(_mission_label)
+	# ---- Lecture Q&A panel ----
+	_qa_panel = PanelContainer.new()
+	_qa_panel.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_qa_panel.position = Vector2(-340, -560)
+	_qa_panel.custom_minimum_size = Vector2(680, 220)
+	_qa_panel.visible = false
+	layer.add_child(_qa_panel)
+	var qv := VBoxContainer.new()
+	_qa_panel.add_child(qv)
+	_qa_question = _mk_label("", 18, Color(1.0, 0.95, 0.75))
+	_qa_question.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_qa_question.custom_minimum_size = Vector2(640, 0)
+	qv.add_child(_qa_question)
+	_qa_btns = HBoxContainer.new()
+	_qa_btns.add_theme_constant_override("separation", 8)
+	qv.add_child(_qa_btns)
+	for qi in range(3):
+		var qb := Button.new()
+		qb.text = "?"
+		qb.pressed.connect(_qa_answer_pressed.bind(qi))
+		_qa_btns.add_child(qb)
+	# ---- Circular minimap (bottom-right) + quest marker (3D) ----
+	_minimap = Minimap.new()
+	_minimap.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_minimap.position = Vector2(-186, -186)
+	_minimap.custom_minimum_size = Vector2(172, 172)
+	layer.add_child(_minimap)
+	_quest_marker = MeshInstance3D.new()
+	var qmesh := SphereMesh.new()
+	qmesh.radius = 0.55
+	qmesh.height = 1.1
+	_quest_marker.mesh = qmesh
+	var qmat := StandardMaterial3D.new()
+	qmat.albedo_color = Color(1.0, 0.85, 0.15)
+	qmat.emission_enabled = true
+	qmat.emission = Color(1.0, 0.8, 0.1)
+	qmat.emission_energy_multiplier = 1.6
+	_quest_marker.material_override = qmat
+	_quest_marker.position = Vector3(0, 3.2, 0)
+	add_child(_quest_marker)
 	_refresh_hud()
 	_refresh_classmates()
 
@@ -740,6 +1706,32 @@ func _refresh_hud() -> void:
 	_hud_period.text = _period_name(game_minutes / 60.0)
 	_hud_money.text = "₹ %d" % money
 	_hud_energy.value = energy
+	if _hud_gpa != null:
+		_hud_gpa.text = "GPA %.2f / 10 • %s" % [gpa, player_major]
+		_hud_health.value = health
+		_hud_stress.value = stress
+		_hud_social.text = "Social %d • %s" % [int(social), player_name]
+		if _quest_index < _quests.size():
+			_hud_objective.text = "🎯 %s" % str(_quests[_quest_index]["title"])
+		else:
+			_hud_objective.text = "🎯 All orientation quests done — live your semester!"
+	if _minimap != null and _player != null:
+		var mitems: Array = []
+		for n in _all_npcs:
+			var npc := n as NPC
+			var col := Color(0.65, 0.65, 0.7)
+			if npc.is_main:
+				col = Color(0.3, 0.85, 0.4)
+			elif npc.is_teacher:
+				col = Color(1.0, 0.85, 0.3)
+			elif npc.is_staff:
+				col = Color(0.9, 0.6, 0.2)
+			mitems.append({"pos": npc.global_position, "color": col, "quest": false})
+		var qp := _quest_target_pos()
+		mitems.append({"pos": qp, "color": Color(1.0, 0.85, 0.15), "quest": true})
+		_minimap.update_data(_player.global_position, _player._yaw, mitems, qp, _quest_index < _quests.size())
+	if _quest_marker != null:
+		_quest_marker.visible = _quest_index < _quests.size()
 	_refresh_classmates()
 
 func _refresh_classmates() -> void:
@@ -748,6 +1740,10 @@ func _refresh_classmates() -> void:
 	var i := 0
 	for child in _class_box.get_children():
 		if i == 0:
+			i += 1
+			continue
+		if i - 1 >= _mains.size():
+			# faculty separator + faculty labels: static text, leave alone
 			i += 1
 			continue
 		var npc := _mains[i - 1] as NPC
@@ -918,6 +1914,26 @@ func _run_captures() -> void:
 	await _shot_file("shot10_seated.png")
 	sitter._label.visible = true
 	_bgs[22]._label.visible = true
+	# Phase 2 shots: (11) street-level avenue WITH the circular minimap HUD
+	# and the yellow quest marker in frame; (12) phone open on Messages.
+	# Park the player at the avenue edge so the minimap is centred on the
+	# staged crowd instead of the far parking spot, and force a HUD refresh
+	# so the minimap draws before the capture.
+	_player.global_position = Vector3(6, 0, 30)
+	_quest_marker.global_position = Vector3(0, 3.2, 55)
+	_quest_marker.visible = true
+	_refresh_hud()
+	await get_tree().create_timer(0.6).timeout
+	_shot(cam, Vector3(0, 1.7, 28), Vector3(1, 1.5, 95))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot11_minimap_hud.png")
+	_phone_panel.visible = true
+	_set_phone_tab("Messages")
+	await get_tree().create_timer(0.6).timeout
+	_shot(cam, Vector3(0, 1.7, 28), Vector3(1, 1.5, 95))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot12_phone.png")
+	_phone_panel.visible = false
 	print("[CAPTURE] done")
 	get_tree().quit(0)
 
