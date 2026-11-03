@@ -1,0 +1,3 @@
+renderer=gl_compatibility
+build=Android (release, mobile feature tag, touch layer + Low default quality, debug-keystore signed)
+exported=2026-11-03T08:39:00Z
