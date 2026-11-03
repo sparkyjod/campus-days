@@ -466,21 +466,146 @@ code had to change.
   path only; gameplay unchanged. NO Phase 5 systems started (no
   Forward+ conversion, audio, LOD/performance pass, or gamepad/touch).
 
-## Phase 5 — Polish & Ports ⏳
+## Phase 5 — Polish & Ports ✅ (completed 2026-11-03; local commit only, push is Stage 3's job)
 
-- 🟡 Graphics screenshot-review pass against §10 bar: first pass done in the overhaul
-  change round (10-shot set incl. street-level avenue + character close-up with
-  visible face) — characters/buildings still stylised, not §10-realistic; final
-  pass → Phase 5
-- 🟡 Character model/animation upgrade: Blender rigs + idle/walk/run/sit/talk clips
-  shipped in the overhaul; per-character mannerisms (Jatin bounces, Shadow
-  slouches…) → Phase 5
-- ⏳ Audio: ambient campus, bell, footsteps, UI, phone, background music (CC0/generated)
-- ⏳ Performance pass (LOD, occlusion, draw-call budget), accessibility options
-  (text size, remappable keys, camera sensitivity), gamepad + touch controls
-- ⏳ Exports: Web (done for Phase 1 slice), Windows, Android
-- ⏳ Final QA sweep per §13 checklist (fresh save, loaded save, day/sleep transitions,
-  quest start→finish, 0-energy/0-money edges, mobile layout)
+The final phase. Windows is the primary build, web the secondary demo
+(Section 16). Two genuine defects found by running the work — not by
+reading it — were fixed, not papered over: (1) the web colour-grade
+shader used Godot 3's `SCREEN_TEXTURE` built-in, which Godot 4.3 rejects
+at compile time — fixed to a `hint_screen_texture` uniform sampler;
+(2) the renderer branch read the wrong ProjectSettings path
+(`renderer/rendering_method`, which returns null) so the Forward+ code
+could never trigger — fixed to `rendering/renderer/rendering_method`,
+and the Forward+ branch was then proven by a full headless run with the
+project flipped to Forward+ (TEST_P5: forward_plus=true,
+grade_applied=false, exit 0).
+
+- ✅ Forward+ conversion for the WINDOWS build (headline): when the
+  project is on Forward+, `_build_environment` enables SDFGI
+  (`sdfgi_enabled`) plus real bloom (`glow_enabled`, intensity 0.35,
+  strength 0.6, HDR threshold 0.85, screen blend). The setting is
+  inert under Compatibility, so the web build is unaffected.
+- ✅ Documented dual-renderer export procedure: `tools/export_dual.sh`
+  (backups `project.godot`, flips it to Forward+ for the Windows
+  export, restores it, then exports the web build; aborts if any file
+  exceeds GitHub's 100 MB limit). The committed `project.godot` stays
+  on GL Compatibility forever, so the web demo and editor default can
+  never be broken by a Windows export. Each export dir carries a
+  `RENDERER.txt` stating its renderer. Verified: both exports were
+  produced from the final code by this script (sizes/timestamps in the
+  delivery report); the Windows .exe itself was NOT run (no Windows
+  machine or Wine in this VM — the Forward+ code path was verified
+  headlessly instead, see above). Renderer-in-package check, done by
+  reading the exported .pck files back: the Windows .pck omits the main
+  rendering_method key entirely while the web .pck carries
+  `gl_compatibility` explicitly — and a scratch project proved the
+  Godot 4.3 engine default for that key is `forward_plus`, so the
+  Windows build runs Forward+ (default) and the web build runs
+  Compatibility (explicit). The lone `gl_compatibility` string in the
+  Windows .pck is the `.mobile` setting, which does not select the
+  desktop renderer.
+- ✅ Section 10 screenshot-review pass: 22 PNGs in `preview/`
+  re-captured from final code under xvfb (0 script errors), including
+  street-level avenue (shot6), character close-up with visible eyes/
+  face (shot2), HUD minimap shot (shot11), new Settings panel shot
+  (shot21) and golden-hour street-level shot (shot22). The shots were
+  read back, not just produced: one pre-existing placement defect was
+  caught and fixed — a quad bench sat dead-centre on the main avenue
+  at (0, 0, 40) and appeared in the middle of the road in every
+  avenue shot; it now sits on the west verge at (-6.5, 0, 40), facing
+  the road. Honest ceiling, unchanged: characters/buildings are
+  dense stylised low-poly, not §10-photoreal; Forward+ SDFGI/bloom
+  improve lighting but do not remake the models.
+- ✅ Animation mannerisms: per-character flavour layered on the baked
+  Blender clips via the model root (NPC code yaws the node, never the
+  root, so the layer never fights facing): Jatin bounces (walk ×1.18
+  + bob), Shadow slouches (lean 0.10, walk ×0.88), Yumi gestures
+  (talk ×1.3), Gulshan/Chirag sway at idle, Zannat/Diya crisp
+  (walk ×1.05, talk ×1.1), the rest steady. No clip was re-baked or
+  broken; the walk-cycle and seated shots still read (shots 9/10).
+- ✅ Audio (all procedural, `tools/gen_audio.py`, no downloads, no
+  licences, ~2.9 MB): 30 s ambient bed (wind + birdsong + murmur),
+  32 s chord-pad music loop, UI click, phone buzz, footstep, campus
+  bell. Wired: ambient + music loop in play, click on dialogue/phone/
+  save, buzz on mission popups, bell on day advance, footsteps every
+  ~2.4 m walked (real play only; silent in test/capture). The VM has
+  no sound card (ALSA falls back to the dummy driver), so audio was
+  verified by file presence + load + hook wiring, NOT by listening —
+  a real device should confirm the mix.
+- ✅ Performance/LOD pass (Section 15.2, partial — see 🟡): tree
+  canopies batched into 3 MultiMesh draws (41 trees × 3 spheres = 123
+  draws → 3; trunks stay individual because they carry collision);
+  visibility ranges on small props (bushes 90 m, dustbins 80 m,
+  notice boards 130 m, street poles 160 m); background NPC name
+  labels culled beyond 45 m (mains/teachers/staff labels always show);
+  textures already capped at 512 px (TexGen) and materials shared via
+  cache. MEASURED, not claimed: a 20 s scripted orbit under xvfb
+  (`--fps-probe`) averaged **7.5 fps with 7,427 draw calls / 8,134
+  objects / 572,916 primitives** — that is llvmpipe SOFTWARE rendering
+  on this VM, not a laptop-GPU number, and it proves the draw-call
+  budget (§2: ~150) is NOT met. The remaining work is a full
+  merge-by-material of the thousands of individual building boxes —
+  see 🟡.
+- ✅ Screen-space colour grade for the web build (Section 15.1): a
+  full-rect ColorRect with a canvas_item shader (saturation 1.12,
+  contrast 1.06, warm tint, vignette) as the FIRST canvas item, so it
+  grades the 3D scene and leaves the UI untouched; applied exactly
+  when the build is NOT Forward+ (test-proven both ways).
+- ✅ Accessibility options (Settings panel, ⚙️ HUD button, persisted
+  to `user://campus_settings.cfg`): text size 14–28 for the reading
+  surfaces (dialogue, phone, prompts — HUD bars keep their sizes so
+  the layout never breaks), camera sensitivity 0.5–2.0 (mouse, touch
+  drag and gamepad stick all scale through it), remappable Interact /
+  Phone / Classmates keys (click a bind button, press a key, Esc
+  cancels), audio mute toggle.
+- ✅ Gamepad/touch basics: left stick move, right stick look,
+  R-shoulder run, A interact, Start phone, Back classmates; touch
+  left-half virtual joystick, right-half drag to look, on-screen
+  Interact/Phone buttons (overlay appears on first real touch only,
+  so desktop play and screenshots are untouched). NOT device-tested:
+  no gamepad or touchscreen exists in this VM, so the paths are
+  code-reviewed + parse/test-verified, not play-verified — a real
+  controller/touch device should confirm them.
+- ✅ Final exports from final code via `tools/export_dual.sh`:
+  build/windows/ CampusDays.exe + .pck (Forward+) and build/web/
+  index.wasm + index.pck (GL Compatibility) — sizes/timestamps in the
+  delivery report, every file under 100 MB.
+- 🟡 Merge-by-material (the rest of the Section 15.2 perf pass): NOT
+  done. The world builder emits thousands of individual MeshInstances
+  (one per wall/box piece, plus bench-group transforms and per-piece
+  collision), so a correct merge needs the builder restructured
+  around batched groups — a high-regression refactor that was judged
+  too risky to land unreviewed at the end of the final phase. The
+  measured baseline (7,427 draws, 7.5 fps software-rendered) is
+  recorded above so the next pass starts from evidence, not a guess.
+- 🟡 Android: Deferred, exact reasons — no Android export templates
+  are installed (the template dir holds web + Windows only) and no
+  JDK/Android SDK exists in this VM, so an Android preset would be
+  unbuildable here. No purchase or account is needed for Android in
+  principle (SDK + keystore are free), but downloading and wiring the
+  SDK would break this run's scope; it needs a machine with the
+  Android toolchain, not a code change.
+- 🟡 Audio mix + gamepad/touch: implemented and wired but NOT
+  play-verified on real hardware (no sound card, gamepad or touch
+  device in this VM) — see the ✅ items above for exactly what was
+  and was not verified.
+- ✅ Final QA: headless full-day sim re-run on final code: exit 0,
+  **zero script errors** (688 `Parameter "m" is null` lines are the
+  known dummy-renderer engine notices), **43/43 non-staff NPCs
+  arrived**, day rolled over to Day 2; Phase 2/3/4 test blocks still
+  PASS unchanged; new Phase 5 test block PASS (mannerisms for all
+  Ten, 6 audio files present, grade flag correct in both renderer
+  modes, dual-export script present, keybinds complete). Full 12-week
+  playthrough verification: the Phase 4 scripted day-step harness
+  (Days 1–85 → Day 86, NOT human free play) re-run on the final code
+  and PASS with identical headline numbers (Day 86, GPA 8.09,
+  money ₹9,120, 12 week summaries, 8 exams, storyline 4/4). The
+  harness exercises game logic, which is renderer-independent; the
+  Windows configuration difference (Forward+ vs Compatibility) was
+  verified separately via the branch run above, and the Windows .exe
+  itself was not executed here. Capture staging stays gated behind
+  the existing `--capture` path only; gameplay unchanged. No Phase 6
+  systems exist or were started — this is the final phase.
 
 ---
 

@@ -16,6 +16,9 @@ extends RefCounted
 
 static var _body: StaticBody3D
 static var _parent: Node3D
+# Phase 5: tree canopies recorded here and batched into one MultiMesh
+# per leaf shade at the end of build() (41 trees x 3 spheres -> 3 draws).
+static var _tree_canopies: Array = [[], [], []]
 
 static func _mi(mesh: Mesh, mat: Material, pos: Vector3, scl: Vector3 = Vector3.ONE, rot_y: float = 0.0) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
@@ -305,17 +308,19 @@ static func _building(cfg: Dictionary) -> void:
 
 static func _tree(pos: Vector3, scl: float = 1.0, shade: int = 0) -> void:
 	var trunk_m := TexGen.mat_tex(TexGen.tex_wood(), Color(0.8, 0.7, 0.6), Vector2(1, 2))
-	var leaf_cols := [Color(0.20, 0.42, 0.16), Color(0.16, 0.36, 0.13), Color(0.26, 0.48, 0.18)]
-	var leaf_m := TexGen.mat_color(leaf_cols[shade % 3], 1.0)
 	_cyl(trunk_m, pos + Vector3(0, 1.4 * scl, 0), 0.22 * scl, 2.8 * scl, true)
-	_sphere(leaf_m, pos + Vector3(0, 3.9 * scl, 0), Vector3(3.4, 3.0, 3.4) * scl)
-	_sphere(leaf_m, pos + Vector3(0.9 * scl, 3.1 * scl, 0.4 * scl), Vector3(2.2, 2.0, 2.2) * scl)
-	_sphere(leaf_m, pos + Vector3(-0.9 * scl, 3.2 * scl, -0.4 * scl), Vector3(2.3, 2.1, 2.3) * scl)
+	# Canopies batched in _finalize_canopies (Phase 5); trunks stay
+	# individual because they carry the collision shapes.
+	_tree_canopies[shade % 3].append([pos + Vector3(0, 3.9 * scl, 0), Vector3(3.4, 3.0, 3.4) * scl])
+	_tree_canopies[shade % 3].append([pos + Vector3(0.9 * scl, 3.1 * scl, 0.4 * scl), Vector3(2.2, 2.0, 2.2) * scl])
+	_tree_canopies[shade % 3].append([pos + Vector3(-0.9 * scl, 3.2 * scl, -0.4 * scl), Vector3(2.3, 2.1, 2.3) * scl])
 
 static func _bush(pos: Vector3, scl: float = 1.0) -> void:
 	var leaf_m := TexGen.mat_color(Color(0.15, 0.33, 0.12), 1.0)
-	_sphere(leaf_m, pos + Vector3(0, 0.32 * scl, 0), Vector3(1.1, 0.65, 1.1) * scl)
-	_sphere(leaf_m, pos + Vector3(0.4 * scl, 0.24 * scl, 0.2 * scl), Vector3(0.7, 0.5, 0.7) * scl)
+	var b1 := _sphere(leaf_m, pos + Vector3(0, 0.32 * scl, 0), Vector3(1.1, 0.65, 1.1) * scl)
+	b1.visibility_range_end = 90.0
+	var b2 := _sphere(leaf_m, pos + Vector3(0.4 * scl, 0.24 * scl, 0.2 * scl), Vector3(0.7, 0.5, 0.7) * scl)
+	b2.visibility_range_end = 90.0
 
 static func _bench(pos: Vector3, rot_y: float = 0.0) -> void:
 	var wood_m := TexGen.mat_tex(TexGen.tex_wood(), Color.WHITE, Vector2(2, 0.4))
@@ -347,16 +352,20 @@ static func _lamp(pos: Vector3) -> OmniLight3D:
 static func _street_pole(pos: Vector3, arm_dir: Vector3) -> void:
 	# decorative streetlight (no extra light node — performance)
 	var pole_m := TexGen.mat_color(Color(0.20, 0.21, 0.24), 0.5)
-	_cyl(pole_m, pos + Vector3(0, 2.9, 0), 0.08, 5.8, true)
+	var pole := _cyl(pole_m, pos + Vector3(0, 2.9, 0), 0.08, 5.8, true)
+	pole.visibility_range_end = 160.0
 	_box(pole_m, pos + Vector3(0, 5.75, 0) + arm_dir * 0.7, Vector3(1.5, 0.09, 0.12) if absf(arm_dir.x) > 0.5 else Vector3(0.12, 0.09, 1.5), false)
 	_box(TexGen.mat_emissive(Color(1.0, 0.92, 0.7), 0.5), pos + Vector3(0, 5.62, 0) + arm_dir * 1.35, Vector3(0.55, 0.09, 0.24) if absf(arm_dir.x) > 0.5 else Vector3(0.24, 0.09, 0.55), false)
 
 static func _dustbin(pos: Vector3) -> void:
-	_cyl(TexGen.mat_color(Color(0.13, 0.35, 0.18), 0.7), pos + Vector3(0, 0.36, 0), 0.27, 0.72, true)
-	_cyl(TexGen.mat_color(Color(0.10, 0.10, 0.11), 0.6), pos + Vector3(0, 0.75, 0), 0.29, 0.07, false)
+	var d1 := _cyl(TexGen.mat_color(Color(0.13, 0.35, 0.18), 0.7), pos + Vector3(0, 0.36, 0), 0.27, 0.72, true)
+	d1.visibility_range_end = 80.0
+	var d2 := _cyl(TexGen.mat_color(Color(0.10, 0.10, 0.11), 0.6), pos + Vector3(0, 0.75, 0), 0.29, 0.07, false)
+	d2.visibility_range_end = 80.0
 
 static func _notice_board(pos: Vector3, rot_y: float, lines: String) -> void:
-	_box(TexGen.mat_tex(TexGen.tex_wood(), Color.WHITE, Vector2(3, 2)), pos + Vector3(0, 1.5, 0), Vector3(3.4, 2.0, 0.18), true, rot_y)
+	var nb := _box(TexGen.mat_tex(TexGen.tex_wood(), Color.WHITE, Vector2(3, 2)), pos + Vector3(0, 1.5, 0), Vector3(3.4, 2.0, 0.18), true, rot_y)
+	nb.visibility_range_end = 130.0
 	var fwd := Vector3(sin(rot_y), 0, cos(rot_y))
 	_sign(lines, pos + Vector3(0, 1.6, 0) - fwd * 0.13, 54, Color(1.0, 0.97, 0.85), rot_y + PI)
 
@@ -370,6 +379,33 @@ static func _signpost(pos: Vector3, entries: Array) -> void:
 		var fwd := Vector3(sin(rot), 0, cos(rot))
 		_sign(e[0], pos + Vector3(0, y + 0.01, 0) + fwd * 0.05, 44, Color(1, 1, 1), rot)
 		y -= 0.48
+
+static func _finalize_canopies() -> void:
+	# Phase 5 MultiMesh pass: one MultiMeshInstance3D per leaf shade.
+	var leaf_cols := [Color(0.20, 0.42, 0.16), Color(0.16, 0.36, 0.13), Color(0.26, 0.48, 0.18)]
+	var sphere_mesh: SphereMesh = _shared_sphere
+	if sphere_mesh == null:
+		sphere_mesh = SphereMesh.new()
+		sphere_mesh.radius = 0.5
+		sphere_mesh.height = 1.0
+		sphere_mesh.radial_segments = 14
+		sphere_mesh.rings = 8
+	for shade in range(3):
+		var items: Array = _tree_canopies[shade]
+		if items.is_empty():
+			continue
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = sphere_mesh
+		mm.instance_count = items.size()
+		for i in range(items.size()):
+			mm.set_instance_transform(i, Transform3D(Basis.IDENTITY.scaled(items[i][1]), items[i][0]))
+		var inst := MultiMeshInstance3D.new()
+		inst.multimesh = mm
+		inst.material_override = TexGen.mat_color(leaf_cols[shade], 1.0)
+		inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		_parent.add_child(inst)
+	_tree_canopies = [[], [], []]
 
 static func build(parent: Node3D) -> Dictionary:
 	_parent = parent
@@ -520,7 +556,7 @@ static func build(parent: Node3D) -> Dictionary:
 	for fb in [Vector3(-33, 0, -23), Vector3(33, 0, -23), Vector3(-33, 0, 13), Vector3(33, 0, 13), Vector3(46, 0, -44), Vector3(70, 0, -44)]:
 		_box(edging_m, fb + Vector3(0, 0.16, 0), Vector3(4.4, 0.32, 1.5), false)
 		_box(flower_m, fb + Vector3(0, 0.30, 0), Vector3(4.1, 0.10, 1.2), false)
-	var bench_defs := [[Vector3(-8, 0, -12), 0.4], [Vector3(9, 0, 2), -0.5], [Vector3(-14, 0, 3), 0.2], [Vector3(15, 0, -14), 2.8], [Vector3(0, 0, 40), 0.0], [Vector3(-40, 0, -14), 1.57], [Vector3(40, 0, -14), -1.57], [Vector3(-20, 0, -16), 0.9], [Vector3(22, 0, 8), -2.2], [Vector3(17, 0, 78), 1.57]]
+	var bench_defs := [[Vector3(-8, 0, -12), 0.4], [Vector3(9, 0, 2), -0.5], [Vector3(-14, 0, 3), 0.2], [Vector3(15, 0, -14), 2.8], [Vector3(-6.5, 0, 40), 1.57], [Vector3(-40, 0, -14), 1.57], [Vector3(40, 0, -14), -1.57], [Vector3(-20, 0, -16), 0.9], [Vector3(22, 0, 8), -2.2], [Vector3(17, 0, 78), 1.57]]
 	for b in bench_defs:
 		_bench(b[0], b[1])
 		# two seat spots per quad bench (garden benches handled in _build_gardens)
@@ -611,6 +647,7 @@ static func build(parent: Node3D) -> Dictionary:
 		["uni_path", "gard_mid"], ["gard_mid", "garden_in"],
 		["gate", "city_road"], ["city_road", "city_bus"], ["city_bus", "city_center"], ["city_center", "city_park"]
 	]
+	_finalize_canopies() # Phase 5: batch tree canopies into 3 MultiMesh draws
 	var astar := AStar3D.new()
 	var ids: Dictionary = {}
 	var nid := 0

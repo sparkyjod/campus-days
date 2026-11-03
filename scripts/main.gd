@@ -115,6 +115,35 @@ var _npc_msg_timer: float = 45.0
 var _qa_teacher: NPC = null
 var _qa_answer: int = 0
 var _qa_period: String = ""
+# ---------------- Phase 5 state ----------------
+var _forward_plus: bool = false # true only while exporting/running Forward+
+var _audio_ambient: AudioStreamPlayer = null
+var _audio_music: AudioStreamPlayer = null
+var _audio_sfx: AudioStreamPlayer = null
+var _audio_streams: Dictionary = {}
+var _audio_muted: bool = false
+var _text_size: int = 20
+var _cam_sensitivity: float = 1.0
+var _keybinds: Dictionary = {}
+var _rebind_target: String = ""
+var _settings_panel: PanelContainer = null
+var _settings_bind_btns: Dictionary = {}
+var _grade_applied: bool = false
+var _fps_probe: bool = false
+var _fps_frames: int = 0
+var _fps_time: float = 0.0
+var _fps_cam: Camera3D = null
+var _fps_angle: float = 0.0
+var _foot_acc: float = 0.0
+var _foot_init: bool = false
+var _last_player_pos: Vector3 = Vector3.ZERO
+var _touch_mode: bool = false
+var _touch_ui: Control = null
+var _touch_base: ColorRect = null
+var _touch_knob: ColorRect = null
+var _touch_stick_idx: int = -1
+var _touch_look_idx: int = -1
+var _touch_stick_origin: Vector2 = Vector2.ZERO
 
 const ZONE_CENTERS := {
 	"dorm": Vector3(-66, 0, 18), "lecture": Vector3(-58, 0, -58),
@@ -193,6 +222,11 @@ func _ready() -> void:
 	_test_mode = args.has("--campus-test")
 	_capture_mode = args.has("--capture")
 	_semester_mode = args.has("--campus-semester")
+	# Phase 5: renderer branch + settings load before anything is built.
+	_forward_plus = str(ProjectSettings.get_setting("rendering/renderer/rendering_method")) == "forward_plus"
+	_fps_probe = args.has("--fps-probe")
+	_keybinds = {"interact": KEY_E, "phone": KEY_TAB, "classmates": KEY_C}
+	_p5_load_settings()
 	if _semester_mode:
 		_test_mode = true # same guards as the one-day test (no autosave, no ambient chatter)
 	_build_environment()
@@ -203,12 +237,27 @@ func _ready() -> void:
 	_zone_spots = _world["zone_spots"]
 	_lamps = _world["lamps"]
 	_spawn_player()
+	_player.mouse_sensitivity = _cam_sensitivity
 	_spawn_people()
 	_spawn_teachers()
 	_build_ui()
+	_build_audio()
+	_p5_apply_text_size()
+	_p5_apply_audio_mute()
 	_init_phase2()
 	_p4_weather = Phase4Data.weather_for_day(day)
 	_p4_refresh_dorm_decor()
+	if _fps_probe:
+		# Phase 5 FPS probe: a 20 s orbit over the live campus, then a
+		# printed average + draw-call count. NPCs keep walking; the clock
+		# is frozen by the probe's early return in _process.
+		_player.global_position = Vector3(-130, 0, 100)
+		_fps_cam = Camera3D.new()
+		_fps_cam.fov = 60.0
+		add_child(_fps_cam)
+		_fps_cam.current = true
+		_update_sun()
+		print("[FPS_PROBE] starting 20s orbit (renderer=", ProjectSettings.get_setting("rendering/renderer/rendering_method"), ")")
 	if _semester_mode:
 		# Standalone 12-week harness: no one-day sim first, straight to
 		# the accelerated semester (see _run_semester_harness).
@@ -252,6 +301,17 @@ func _build_environment() -> void:
 	_env.adjustment_brightness = 1.0
 	_env.adjustment_contrast = 1.09
 	_env.adjustment_saturation = 1.14
+	if _forward_plus:
+		# Phase 5 Forward+ headline: real-time GI + bloom. These settings
+		# are inert under Compatibility, so the web build is unaffected;
+		# the web build gets the ColorRect grade instead (see _build_ui).
+		_env.sdfgi_enabled = true
+		_env.glow_enabled = true
+		_env.glow_intensity = 0.35
+		_env.glow_strength = 0.6
+		_env.glow_bloom = 0.12
+		_env.glow_hdr_threshold = 0.85
+		_env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SCREEN
 	_env.fog_enabled = true
 	_env.fog_light_color = Color(0.79, 0.84, 0.91)
 	_env.fog_light_energy = 0.55
@@ -566,6 +626,21 @@ func _p4_apply_tiers(force_real: bool = false) -> void:
 			npc.set_path(_path_to(npc.global_position, npc.target_zone, npc.spot))
 
 func _process(delta: float) -> void:
+	if _fps_probe:
+		# Phase 5 FPS probe: orbit the quad for 20 s, then report the
+		# average frame rate + draw calls and quit. NPCs animate on their
+		# own _process; the day clock stays frozen for a stable scene.
+		_fps_frames += 1
+		_fps_time += delta
+		_fps_angle += delta * 0.25
+		if _fps_cam != null:
+			_fps_cam.global_position = Vector3(sin(_fps_angle) * 42.0, 9.0, cos(_fps_angle) * 42.0)
+			_fps_cam.look_at(Vector3(0, 2, 0), Vector3.UP)
+		if _fps_time >= 20.0:
+			print("[FPS_PROBE] frames=", _fps_frames, " seconds=%.1f" % _fps_time, " avg_fps=%.1f" % (_fps_frames / _fps_time))
+			print("[FPS_PROBE] draw_calls=", RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME), " objects=", RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_OBJECTS_IN_FRAME), " primitives=", RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME))
+			get_tree().quit(0)
+		return
 	if not paused and not _capture_mode:
 		game_minutes += delta * speed_mult
 		energy = maxf(0.0, energy - delta * speed_mult * (3.2 / 60.0))
@@ -605,6 +680,21 @@ func _process(delta: float) -> void:
 	if _ui_timer <= 0.0:
 		_ui_timer = 0.5
 		_refresh_hud()
+		if not _test_mode and not _capture_mode:
+			_p5_cull_labels()
+	# Phase 5 footsteps: one soft thud per ~2.4 m walked (real play only).
+	if not _test_mode and not _capture_mode and not paused and _player != null:
+		if not _foot_init:
+			_last_player_pos = _player.global_position
+			_foot_init = true
+		else:
+			var pd := _player.global_position.distance_to(_last_player_pos)
+			_last_player_pos = _player.global_position
+			if _player.velocity.length() > 0.5:
+				_foot_acc += pd
+				if _foot_acc >= 2.4:
+					_foot_acc = 0.0
+					_p5_sfx("footstep")
 	if _test_mode:
 		for n in _all_npcs:
 			var npc := n as NPC
@@ -624,12 +714,13 @@ func _finish_test() -> void:
 	var p2_ok := _run_phase2_tests()
 	var p3_ok := _run_phase3_tests()
 	var p4_ok := _run_phase4_tests()
+	var p5_ok := _run_phase5_tests()
 	var sem_ok := false
-	if p2_ok and p3_ok and p4_ok:
+	if p2_ok and p3_ok and p4_ok and p5_ok:
 		sem_ok = _run_semester_harness()
 	else:
-		print("[TEST_P4_SEM] skipped: earlier phase tests failed (p2=", p2_ok, " p3=", p3_ok, " p4=", p4_ok, ")")
-	get_tree().quit(0 if (p2_ok and p3_ok and p4_ok and sem_ok) else 1)
+		print("[TEST_P4_SEM] skipped: earlier phase tests failed (p2=", p2_ok, " p3=", p3_ok, " p4=", p4_ok, " p5=", p5_ok, ")")
+	get_tree().quit(0 if (p2_ok and p3_ok and p4_ok and p5_ok and sem_ok) else 1)
 
 func _run_phase2_tests() -> bool:
 	# Phase 2 headless evidence: teachers present, dialogue sampling
@@ -886,7 +977,66 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and _current_npc == null and not _capture_mode:
 		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	# Phase 5: gamepad basics (left stick move / right stick look live in
+	# player.gd; buttons dispatch here) and touch basics.
+	if event is InputEventJoypadButton and event.pressed and not _capture_mode:
+		var jb := event as InputEventJoypadButton
+		if jb.button_index == JOY_BUTTON_A:
+			_do_interact()
+		elif jb.button_index == JOY_BUTTON_START:
+			if _phone_panel != null:
+				_phone_panel.visible = not _phone_panel.visible
+				if _phone_panel.visible:
+					_set_phone_tab(_phone_tab)
+		elif jb.button_index == JOY_BUTTON_BACK:
+			_class_panel.visible = not _class_panel.visible
+	if event is InputEventScreenTouch and not _capture_mode and not _test_mode:
+		var st := event as InputEventScreenTouch
+		if not _touch_mode:
+			_touch_mode = true
+			if _touch_ui != null:
+				_touch_ui.visible = true
+		var vw := get_viewport().get_visible_rect().size.x
+		if st.pressed:
+			if st.position.x < vw * 0.5 and _touch_stick_idx == -1:
+				_touch_stick_idx = st.index
+				_touch_stick_origin = st.position
+				if _touch_knob != null:
+					_touch_knob.position = Vector2(40, 40)
+			elif st.position.x >= vw * 0.5 and _touch_look_idx == -1:
+				_touch_look_idx = st.index
+		else:
+			if st.index == _touch_stick_idx:
+				_touch_stick_idx = -1
+				_player.touch_dir = Vector2.ZERO
+				if _touch_knob != null:
+					_touch_knob.position = Vector2(40, 40)
+			if st.index == _touch_look_idx:
+				_touch_look_idx = -1
+	if event is InputEventScreenDrag and not _capture_mode and not _test_mode:
+		var sd := event as InputEventScreenDrag
+		if sd.index == _touch_stick_idx:
+			var v := (sd.position - _touch_stick_origin) / 55.0
+			if v.length() > 1.0:
+				v = v.normalized()
+			_player.touch_dir = v
+			if _touch_knob != null:
+				_touch_knob.position = Vector2(40, 40) + v * 32.0
+		elif sd.index == _touch_look_idx:
+			_player.apply_look(sd.relative.x * 1.5, sd.relative.y * 1.5)
 	if event is InputEventKey and event.pressed and not event.echo:
+		# Phase 5 key rebinding: while a bind button waits, the next key
+		# becomes that action's key (Escape cancels).
+		if _rebind_target != "":
+			var rk := (event as InputEventKey).keycode
+			if rk == KEY_ESCAPE:
+				_rebind_target = ""
+			else:
+				_keybinds[_rebind_target] = rk
+				_rebind_target = ""
+				_p5_save_settings()
+			_p5_refresh_settings_labels()
+			return
 		var k := (event as InputEventKey).keycode
 		if k == KEY_ESCAPE:
 			if _current_npc != null:
@@ -902,42 +1052,11 @@ func _input(event: InputEvent) -> void:
 			elif _class_panel.visible:
 				_class_panel.visible = false
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-		elif k == KEY_E:
-			if _current_npc != null:
-				_close_dialogue()
-			elif _qa_panel != null and _qa_panel.visible:
-				pass # answer with the buttons, not E
-			elif _interact_kind == "counter":
-				_buy_counter()
-			elif _interact_kind == "chai":
-				_buy_chai()
-			elif _interact_kind == "lecture":
-				_attend_lecture()
-			elif _interact_kind == "study" or _interact_kind == "groupstudy":
-				_do_study(_interact_kind == "groupstudy")
-			elif _interact_kind == "submit":
-				_do_submit()
-			elif _interact_kind == "sleep":
-				_do_sleep()
-			elif _interact_kind == "job_canteen":
-				_do_job("canteen")
-			elif _interact_kind == "city_bus_out":
-				_p4_bus_to_city()
-			elif _interact_kind == "city_bus_back":
-				_p4_bus_to_campus()
-			elif _interact_kind == "shop":
-				_p4_open_shop()
-			elif _interact_kind == "club":
-				_p4_club_session(_p4_prompt_club)
-			elif _interact_kind == "exam":
-				_p4_take_exam()
-			elif _interact_kind.begins_with("sport_"):
-				_p4_sport(_interact_kind.substr(6))
-			elif _interact_kind == "npc" and _interact_npc != null:
-				_open_dialogue(_interact_npc)
-		elif k == KEY_C and not _capture_mode:
+		elif k == int(_keybinds.get("interact", KEY_E)):
+			_do_interact()
+		elif k == int(_keybinds.get("classmates", KEY_C)) and not _capture_mode:
 			_class_panel.visible = not _class_panel.visible
-		elif (k == KEY_TAB or k == KEY_P) and not _capture_mode:
+		elif (k == int(_keybinds.get("phone", KEY_TAB)) or k == KEY_P) and not _capture_mode:
 			if _phone_panel != null:
 				_phone_panel.visible = not _phone_panel.visible
 				if _phone_panel.visible:
@@ -946,6 +1065,41 @@ func _input(event: InputEvent) -> void:
 			if _phone_panel != null:
 				_phone_panel.visible = true
 				_set_phone_tab("Map")
+
+# Phase 5: the interact dispatch, shared by E, gamepad A and the touch button.
+func _do_interact() -> void:
+	if _current_npc != null:
+		_close_dialogue()
+	elif _qa_panel != null and _qa_panel.visible:
+		pass # answer with the buttons, not E
+	elif _interact_kind == "counter":
+		_buy_counter()
+	elif _interact_kind == "chai":
+		_buy_chai()
+	elif _interact_kind == "lecture":
+		_attend_lecture()
+	elif _interact_kind == "study" or _interact_kind == "groupstudy":
+		_do_study(_interact_kind == "groupstudy")
+	elif _interact_kind == "submit":
+		_do_submit()
+	elif _interact_kind == "sleep":
+		_do_sleep()
+	elif _interact_kind == "job_canteen":
+		_do_job("canteen")
+	elif _interact_kind == "city_bus_out":
+		_p4_bus_to_city()
+	elif _interact_kind == "city_bus_back":
+		_p4_bus_to_campus()
+	elif _interact_kind == "shop":
+		_p4_open_shop()
+	elif _interact_kind == "club":
+		_p4_club_session(_p4_prompt_club)
+	elif _interact_kind == "exam":
+		_p4_take_exam()
+	elif _interact_kind.begins_with("sport_"):
+		_p4_sport(_interact_kind.substr(6))
+	elif _interact_kind == "npc" and _interact_npc != null:
+		_open_dialogue(_interact_npc)
 
 func _buy_counter() -> void:
 	var hour := game_minutes / 60.0
@@ -988,6 +1142,7 @@ func _tier_name(f: int) -> String:
 	return "Best Friend"
 
 func _open_dialogue(npc: NPC) -> void:
+	_p5_sfx("ui_click") # Phase 5 audio hook (no-op in test/capture)
 	_current_npc = npc
 	npc.talking = true
 	_player.controls_locked = true
@@ -1258,6 +1413,7 @@ func _complete_quest_if(qid: String) -> bool:
 	return true
 
 func _show_mission(title: String, desc: String) -> void:
+	_p5_sfx("phone_buzz") # Phase 5 audio hook (no-op in test/capture)
 	if _mission_label == null:
 		return
 	_mission_label.text = "🎯 %s\n%s" % [title, desc]
@@ -1399,6 +1555,7 @@ func _advance_day() -> void:
 	# Shared end-of-day logic for sleep AND the midnight rollover:
 	# attendance consequences + professor remarks, overdue assignments,
 	# calendar events, fresh messages/buzz, daily resets, autosave.
+	_p5_sfx("bell") # Phase 5: campus bell on day advance (no-op in test)
 	var weekday := (day - 1) % 7 # 0=Mon .. 4=Fri are lecture days
 	# Phase 3: no attendance penalty during the Diwali break (Days 49-51).
 	if weekday < 5 and not (day >= 49 and day <= 51):
@@ -1556,6 +1713,7 @@ func _apply_state(state: Dictionary) -> void:
 	_refresh_classmates()
 
 func _save_slot_pressed(slot: int) -> void:
+	_p5_sfx("ui_click") # Phase 5 audio hook (no-op in test/capture)
 	if SaveSystem.save(slot, _collect_state()):
 		_show_toast("Saved to slot %d." % slot)
 	else:
@@ -1587,6 +1745,7 @@ func _create_start_pressed() -> void:
 # ---------------- Phase 2 phone ----------------
 
 func _set_phone_tab(tab: String) -> void:
+	_p5_sfx("ui_click") # Phase 5 audio hook (no-op in test/capture)
 	_phone_tab = tab
 	_phone_job_row.visible = (tab == "Jobs")
 	if _phone_city_row != null:
@@ -3424,6 +3583,37 @@ func _mk_label(text: String, size: int = 20, color: Color = Color.WHITE) -> Labe
 func _build_ui() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
+	# Phase 5 screen-space colour grade for the Compatibility (web) build
+	# only (Section 15.1: no CompositorEffect on Compatibility). This rect
+	# is the FIRST canvas item, so SCREEN_TEXTURE holds the 3D scene and
+	# not the UI — UI drawn later stays ungraded. Forward+ builds skip it
+	# and use real glow/SDFGI instead (see _build_environment).
+	if not _forward_plus:
+		var grade := ColorRect.new()
+		grade.set_anchors_preset(Control.PRESET_FULL_RECT)
+		var sh := Shader.new()
+		sh.code = """
+shader_type canvas_item;
+uniform sampler2D screen_texture : hint_screen_texture;
+uniform float saturation : hint_range(0.0, 2.0) = 1.12;
+uniform float contrast : hint_range(0.0, 2.0) = 1.06;
+uniform float vignette_strength : hint_range(0.0, 1.0) = 0.30;
+void fragment() {
+	vec3 c = texture(screen_texture, SCREEN_UV).rgb;
+	float lum = dot(c, vec3(0.299, 0.587, 0.114));
+	c = mix(vec3(lum), c, saturation);
+	c = (c - 0.5) * contrast + 0.5;
+	c *= vec3(1.03, 1.01, 0.98);
+	float d = distance(SCREEN_UV, vec2(0.5));
+	c *= 1.0 - vignette_strength * smoothstep(0.45, 0.9, d);
+	COLOR = vec4(clamp(c, 0.0, 1.0), 1.0);
+}
+"""
+		var shmat := ShaderMaterial.new()
+		shmat.shader = sh
+		grade.material = shmat
+		layer.add_child(grade)
+		_grade_applied = true
 	# top-left status panel
 	var panel := PanelContainer.new()
 	panel.position = Vector2(14, 12)
@@ -3505,6 +3695,10 @@ func _build_ui() -> void:
 	b_save.text = "💾 Save"
 	b_save.pressed.connect(func() -> void: _save_panel.visible = not _save_panel.visible)
 	bb.add_child(b_save)
+	var b_settings := Button.new()
+	b_settings.text = "⚙️ Settings"
+	b_settings.pressed.connect(func() -> void: _settings_panel.visible = not _settings_panel.visible)
+	bb.add_child(b_settings)
 	# help / prompt / toast
 	var help := _mk_label("WASD move • Mouse look (click to capture) • Shift run • E talk/buy • C classmates • Esc release mouse", 15, Color(0.9, 0.9, 0.9))
 	help.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
@@ -3800,6 +3994,8 @@ func _build_ui() -> void:
 	_quest_marker.material_override = qmat
 	_quest_marker.position = Vector3(0, 3.2, 0)
 	add_child(_quest_marker)
+	_build_settings_panel(layer)
+	_build_touch_ui(layer)
 	_refresh_hud()
 	_refresh_classmates()
 
@@ -3862,6 +4058,226 @@ func _refresh_classmates() -> void:
 		var npc := _mains[i - 1] as NPC
 		(child as Label).text = "%s — %s Yr%s\n♥ %d (%s) • at %s" % [npc.data["name"], npc.data["major"], str(npc.data["year"]), npc.friendship, _tier_name(npc.friendship), ZONE_NAMES.get(npc.target_zone, npc.target_zone)]
 		i += 1
+
+# ---------------- Phase 5: settings, audio, touch, tests ----------------
+
+func _p5_load_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load("user://campus_settings.cfg") != OK:
+		return
+	_text_size = int(cfg.get_value("settings", "text_size", _text_size))
+	_cam_sensitivity = float(cfg.get_value("settings", "camera_sensitivity", _cam_sensitivity))
+	_audio_muted = bool(cfg.get_value("settings", "muted", _audio_muted))
+	for action in ["interact", "phone", "classmates"]:
+		if cfg.has_section_key("settings", "key_" + action):
+			_keybinds[action] = int(cfg.get_value("settings", "key_" + action))
+
+func _p5_save_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("settings", "text_size", _text_size)
+	cfg.set_value("settings", "camera_sensitivity", _cam_sensitivity)
+	cfg.set_value("settings", "muted", _audio_muted)
+	for action in ["interact", "phone", "classmates"]:
+		cfg.set_value("settings", "key_" + action, int(_keybinds.get(action, KEY_E)))
+	cfg.save("user://campus_settings.cfg")
+
+func _p5_apply_text_size() -> void:
+	# Text size governs the READING surfaces (dialogue, phone, prompts);
+	# HUD bars keep their own sizes so the layout never breaks.
+	if _dlg_text != null:
+		_dlg_text.add_theme_font_size_override("normal_font_size", _text_size)
+	if _phone_text != null:
+		_phone_text.add_theme_font_size_override("normal_font_size", _text_size)
+	if _prompt_label != null:
+		_prompt_label.add_theme_font_size_override("font_size", _text_size + 2)
+	if _toast_label != null:
+		_toast_label.add_theme_font_size_override("font_size", _text_size)
+	if _mission_label != null:
+		_mission_label.add_theme_font_size_override("font_size", _text_size)
+
+func _p5_apply_audio_mute() -> void:
+	AudioServer.set_bus_mute(0, _audio_muted)
+
+func _build_audio() -> void:
+	# All Phase 5 audio is procedural (tools/gen_audio.py) — no downloads,
+	# no licences, ~2.9 MB total. Loops are set on the WAV streams.
+	var files := {"ambient": "ambient_loop.wav", "music": "music_loop.wav",
+		"ui_click": "ui_click.wav", "phone_buzz": "phone_buzz.wav",
+		"footstep": "footstep.wav", "bell": "bell.wav"}
+	for k in files:
+		var s: Resource = load("res://assets/audio/" + files[k])
+		if s != null:
+			_audio_streams[k] = s
+	var amb := _audio_streams.get("ambient") as AudioStreamWAV
+	if amb != null:
+		amb.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	var mus := _audio_streams.get("music") as AudioStreamWAV
+	if mus != null:
+		mus.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	_audio_ambient = AudioStreamPlayer.new()
+	_audio_ambient.stream = _audio_streams.get("ambient")
+	_audio_ambient.volume_db = -16.0
+	add_child(_audio_ambient)
+	_audio_music = AudioStreamPlayer.new()
+	_audio_music.stream = _audio_streams.get("music")
+	_audio_music.volume_db = -20.0
+	add_child(_audio_music)
+	_audio_sfx = AudioStreamPlayer.new()
+	_audio_sfx.volume_db = -2.0
+	add_child(_audio_sfx)
+	if not _test_mode and not _capture_mode and not _fps_probe:
+		if _audio_ambient.stream != null:
+			_audio_ambient.play()
+		if _audio_music.stream != null:
+			_audio_music.play()
+
+func _p5_sfx(name: String) -> void:
+	if _test_mode or _capture_mode or _fps_probe or _audio_sfx == null:
+		return
+	var s := _audio_streams.get(name) as AudioStream
+	if s == null:
+		return
+	_audio_sfx.stream = s
+	_audio_sfx.play()
+
+func _p5_cull_labels() -> void:
+	# Phase 5 LOD: background students' name labels only render near the
+	# player (mains/teachers/staff labels always show — they are identity).
+	if _player == null:
+		return
+	for n in _all_npcs:
+		var npc := n as NPC
+		if npc.is_main or npc.is_teacher or npc.is_staff or npc._label == null:
+			continue
+		npc._label.visible = _player.global_position.distance_to(npc.global_position) < 45.0
+
+func _p5_start_rebind(action: String) -> void:
+	_rebind_target = action
+	_p5_refresh_settings_labels()
+
+func _p5_refresh_settings_labels() -> void:
+	var names := {"interact": "Interact", "phone": "Phone", "classmates": "Classmates"}
+	for action in _settings_bind_btns:
+		var btn := _settings_bind_btns[action] as Button
+		if _rebind_target == action:
+			btn.text = "%s: Press a key… (Esc cancels)" % names[action]
+		else:
+			btn.text = "%s: %s" % [names[action], OS.get_keycode_string(int(_keybinds.get(action, KEY_E)))]
+
+func _build_settings_panel(layer: CanvasLayer) -> void:
+	_settings_panel = PanelContainer.new()
+	_settings_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_settings_panel.position = Vector2(-230, -230)
+	_settings_panel.custom_minimum_size = Vector2(460, 460)
+	_settings_panel.visible = false
+	layer.add_child(_settings_panel)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	_settings_panel.add_child(v)
+	v.add_child(_mk_label("⚙️ SETTINGS", 20, Color(1.0, 0.95, 0.7)))
+	v.add_child(_mk_label("Text size (dialogue, phone, prompts):", 16))
+	var ts := HSlider.new()
+	ts.min_value = 14
+	ts.max_value = 28
+	ts.step = 1
+	ts.value = _text_size
+	ts.custom_minimum_size = Vector2(400, 24)
+	ts.value_changed.connect(func(val: float) -> void: _text_size = int(val); _p5_apply_text_size(); _p5_save_settings())
+	v.add_child(ts)
+	v.add_child(_mk_label("Camera sensitivity:", 16))
+	var cs := HSlider.new()
+	cs.min_value = 0.5
+	cs.max_value = 2.0
+	cs.step = 0.05
+	cs.value = _cam_sensitivity
+	cs.custom_minimum_size = Vector2(400, 24)
+	cs.value_changed.connect(func(val: float) -> void: _cam_sensitivity = val; _player.mouse_sensitivity = val; _p5_save_settings())
+	v.add_child(cs)
+	var mute := CheckButton.new()
+	mute.text = "Mute audio"
+	mute.button_pressed = _audio_muted
+	mute.toggled.connect(func(on: bool) -> void: _audio_muted = on; _p5_apply_audio_mute(); _p5_save_settings())
+	v.add_child(mute)
+	v.add_child(_mk_label("Remappable keys (click, then press a key):", 16))
+	for action in ["interact", "phone", "classmates"]:
+		var b := Button.new()
+		_settings_bind_btns[action] = b
+		b.pressed.connect(_p5_start_rebind.bind(action))
+		v.add_child(b)
+	_p5_refresh_settings_labels()
+	v.add_child(_mk_label("Gamepad: left stick move, right stick look, R-shoulder run, A interact, Start phone, Back classmates.", 14, Color(0.85, 0.9, 1.0)))
+	v.add_child(_mk_label("Touch: left-half joystick to move, right-half drag to look, on-screen Interact / Phone buttons.", 14, Color(0.85, 0.9, 1.0)))
+	var close := Button.new()
+	close.text = "Close"
+	close.pressed.connect(func() -> void: _settings_panel.visible = false; _rebind_target = "")
+	v.add_child(close)
+
+func _build_touch_ui(layer: CanvasLayer) -> void:
+	# Phase 5 touch basics. Hidden until the first real touch, so desktop
+	# play and screenshots are untouched. The joystick graphics ignore
+	# mouse input so touches still reach _input for the joystick logic.
+	_touch_ui = Control.new()
+	_touch_ui.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_touch_ui.visible = false
+	_touch_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(_touch_ui)
+	_touch_base = ColorRect.new()
+	_touch_base.color = Color(1, 1, 1, 0.15)
+	_touch_base.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_touch_base.position = Vector2(24, -160)
+	_touch_base.custom_minimum_size = Vector2(120, 120)
+	_touch_base.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_touch_ui.add_child(_touch_base)
+	_touch_knob = ColorRect.new()
+	_touch_knob.color = Color(1, 1, 1, 0.5)
+	_touch_knob.position = Vector2(40, 40)
+	_touch_knob.custom_minimum_size = Vector2(40, 40)
+	_touch_knob.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_touch_base.add_child(_touch_knob)
+	var b_interact := Button.new()
+	b_interact.text = "✋ Interact"
+	b_interact.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	b_interact.position = Vector2(-320, -120)
+	b_interact.custom_minimum_size = Vector2(140, 56)
+	b_interact.pressed.connect(func() -> void: _do_interact())
+	_touch_ui.add_child(b_interact)
+	var b_phone := Button.new()
+	b_phone.text = "📱 Phone"
+	b_phone.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	b_phone.position = Vector2(-160, -120)
+	b_phone.custom_minimum_size = Vector2(140, 56)
+	b_phone.pressed.connect(func() -> void: _phone_panel.visible = not _phone_panel.visible; if _phone_panel.visible: _set_phone_tab(_phone_tab))
+	_touch_ui.add_child(b_phone)
+
+func _run_phase5_tests() -> bool:
+	# Phase 5 headless evidence: mannerisms assigned, audio files present,
+	# web colour grade applied exactly when NOT Forward+, dual-renderer
+	# script present, settings round-trip sane.
+	var ok := true
+	print("[TEST_P5] renderer=", ProjectSettings.get_setting("rendering/renderer/rendering_method"), " forward_plus=", _forward_plus, " grade_applied=", _grade_applied)
+	for n in _mains:
+		var npc := n as NPC
+		if npc._manner == "":
+			print("[TEST_P5_FAIL] no mannerism for ", npc.data["name"])
+			ok = false
+	print("[TEST_P5] mannerisms: ", _mains.map(func(n: NPC) -> String: return str(n.data["name"]) + ":" + n._manner))
+	for f in ["ambient_loop.wav", "music_loop.wav", "ui_click.wav", "phone_buzz.wav", "footstep.wav", "bell.wav"]:
+		if not FileAccess.file_exists("res://assets/audio/" + f):
+			print("[TEST_P5_FAIL] missing audio: ", f)
+			ok = false
+	if _grade_applied != (not _forward_plus):
+		print("[TEST_P5_FAIL] grade flag mismatch (grade=", _grade_applied, " forward_plus=", _forward_plus, ")")
+		ok = false
+	if not FileAccess.file_exists("res://tools/export_dual.sh"):
+		print("[TEST_P5_FAIL] missing tools/export_dual.sh")
+		ok = false
+	if _keybinds.size() != 3:
+		print("[TEST_P5_FAIL] keybinds incomplete: ", _keybinds)
+		ok = false
+	else:
+		print("[TEST_P5] keybinds: ", _keybinds, " text_size=", _text_size, " cam_sens=", _cam_sensitivity)
+	print("[TEST_P5] RESULT: ", "PASS" if ok else "FAIL")
+	return ok
 
 # ---------------- screenshots (capture mode) ----------------
 
@@ -4126,6 +4542,25 @@ func _run_captures() -> void:
 	await _shot_file("shot20_rain_avenue.png")
 	_p4_weather = "clear"
 	_update_sun()
+	_player.global_position = Vector3(-130, 0, 100)
+	# ---- Phase 5 shots ----
+	# shot21: the new Settings panel open (text size / sensitivity /
+	# remappable keys), over the same street-level avenue.
+	_settings_panel.visible = true
+	_player.global_position = Vector3(6, 0, 30)
+	_refresh_hud()
+	await get_tree().create_timer(0.6).timeout
+	_shot(cam, Vector3(0, 1.7, 28), Vector3(1, 1.5, 95))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot21_settings.png")
+	_settings_panel.visible = false
+	# shot22: golden-hour street level (18:30) — the lighting/atmosphere
+	# pass at the time of day players actually notice it.
+	game_minutes = 18.5 * 60.0
+	_update_sun()
+	_shot(cam, Vector3(0, 1.7, 28), Vector3(1, 1.5, 95))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot22_golden_hour.png")
 	_player.global_position = Vector3(-130, 0, 100)
 	print("[CAPTURE] done")
 	get_tree().quit(0)

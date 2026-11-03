@@ -8,6 +8,10 @@ var walk_speed: float = 3.4
 var run_speed: float = 6.2
 var speed_factor: float = 1.0 # energy effects applied by Main
 var controls_locked: bool = false
+# Phase 5: camera sensitivity (settings), touch joystick vector, both
+# feeding the same movement code as WASD/gamepad.
+var mouse_sensitivity: float = 1.0
+var touch_dir: Vector2 = Vector2.ZERO
 
 var _yaw: float = 0.0
 var _pitch: float = -0.32
@@ -53,8 +57,15 @@ func get_camera() -> Camera3D:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and not controls_locked:
 		var mm := event as InputEventMouseMotion
-		_yaw -= mm.relative.x * 0.0026
-		_pitch = clampf(_pitch - mm.relative.y * 0.0026, -1.1, 0.55)
+		_yaw -= mm.relative.x * 0.0026 * mouse_sensitivity
+		_pitch = clampf(_pitch - mm.relative.y * 0.0026 * mouse_sensitivity, -1.1, 0.55)
+
+# Phase 5: touch right-half drags and gamepad right stick look through here.
+func apply_look(dx: float, dy: float) -> void:
+	if controls_locked:
+		return
+	_yaw -= dx * 0.0026 * mouse_sensitivity
+	_pitch = clampf(_pitch - dy * 0.0026 * mouse_sensitivity, -1.1, 0.55)
 
 func _physics_process(delta: float) -> void:
 	_pivot.rotation = Vector3(_pitch, _yaw, 0)
@@ -68,7 +79,23 @@ func _physics_process(delta: float) -> void:
 			input_dir.x -= 1.0
 		if Input.is_physical_key_pressed(KEY_D):
 			input_dir.x += 1.0
-	var running := Input.is_physical_key_pressed(KEY_SHIFT) and input_dir != Vector2.ZERO
+	# Phase 5: gamepad left stick + touch joystick feed the same vector.
+	var jx := Input.get_joy_axis(0, JOY_AXIS_LEFT_X)
+	var jy := Input.get_joy_axis(0, JOY_AXIS_LEFT_Y)
+	if absf(jx) > 0.2:
+		input_dir.x += jx
+	if absf(jy) > 0.2:
+		input_dir.y += jy
+	input_dir += touch_dir
+	if input_dir.length() > 1.0:
+		input_dir = input_dir.normalized()
+	var rx := Input.get_joy_axis(0, JOY_AXIS_RIGHT_X)
+	var ry := Input.get_joy_axis(0, JOY_AXIS_RIGHT_Y)
+	if absf(rx) > 0.2 and not controls_locked:
+		_yaw -= rx * 2.0 * delta * mouse_sensitivity
+	if absf(ry) > 0.2 and not controls_locked:
+		_pitch = clampf(_pitch - ry * 2.0 * delta * mouse_sensitivity, -1.1, 0.55)
+	var running := (Input.is_physical_key_pressed(KEY_SHIFT) or Input.is_joy_button_pressed(0, JOY_BUTTON_RIGHT_SHOULDER)) and input_dir != Vector2.ZERO
 	var spd := (run_speed if running else walk_speed) * speed_factor
 	var basis_yaw := Basis(Vector3.UP, _yaw)
 	var dir3 := (basis_yaw * Vector3(input_dir.x, 0, input_dir.y))

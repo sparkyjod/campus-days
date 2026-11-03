@@ -55,11 +55,30 @@ var _bubble: Label3D = null
 var _bubble_timer: float = 0.0
 var _idle_timer: float = 0.0
 var _moving: bool = false
+# Phase 5 mannerisms: a pose/speed flavour layered on the baked clips
+# (Jatin bounces, Shadow slouches, Yumi gestures... — master prompt §10).
+var _manner: String = "steady"
+
+static func manner_for_name(nm: String) -> String:
+	match nm:
+		"Jatin":
+			return "bounce"
+		"Shadow":
+			return "slouch"
+		"Yumi":
+			return "gesture"
+		"Gulshan", "Chirag":
+			return "sway"
+		"Zannat", "Diya":
+			return "crisp"
+		_:
+			return "steady"
 
 func setup(p_data: Dictionary, p_is_main: bool, start_pos: Vector3, p_speed: float) -> void:
 	data = p_data
 	is_main = p_is_main
 	speed = p_speed
+	_manner = manner_for_name(str(p_data.get("name", "")))
 	rng.randomize()
 	global_position = start_pos
 	spot = start_pos
@@ -118,15 +137,40 @@ func _play(clip: String, speed_scale: float = 1.0) -> void:
 
 func _update_anim() -> void:
 	if talking:
-		_play("talk", 1.0)
+		_play("talk", 1.3 if _manner == "gesture" else (1.1 if _manner == "crisp" else 1.0))
 	elif _moving:
-		_play("walk", clampf(_move_speed / 1.55, 0.6, 2.6))
+		var mf := 1.18 if _manner == "bounce" else (0.88 if _manner == "slouch" else (1.05 if _manner == "crisp" else 1.0))
+		_play("walk", clampf(_move_speed / 1.55, 0.6, 2.6) * mf)
 	elif seated:
 		_play("sit", 1.0)
 	elif _bubble.visible:
 		_play("talk", 1.0)
 	else:
 		_play("idle", 1.0)
+	# Phase 5 mannerism pose layer on the model root. NPC code yaws the
+	# NPC node itself, never the model root, so tilting/bobbing the root
+	# is safe and never fights facing. Skipped while anim_frozen (the
+	# capture walk-freeze) because _update_anim is not called then.
+	var mroot: Node3D = _model.get("root")
+	if mroot != null:
+		var t := Time.get_ticks_msec() / 1000.0
+		match _manner:
+			"bounce":
+				mroot.position.y = absf(sin(t * 9.0)) * 0.045 if _moving else 0.0
+				mroot.rotation.x = 0.0
+				mroot.rotation.z = 0.0
+			"slouch":
+				mroot.position.y = 0.0
+				mroot.rotation.x = 0.10
+				mroot.rotation.z = 0.0
+			"sway":
+				mroot.position.y = 0.0
+				mroot.rotation.x = 0.0
+				mroot.rotation.z = 0.0 if _moving else sin(t * 1.4) * 0.035
+			_:
+				mroot.position.y = 0.0
+				mroot.rotation.x = 0.0
+				mroot.rotation.z = 0.0
 
 func _process(delta: float) -> void:
 	if _bubble_timer > 0.0:
