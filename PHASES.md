@@ -892,3 +892,131 @@ cadence touched.
   `--touch-test`. All three exports refreshed again via
   `tools/export_dual.sh`; APK `apksigner verify` passes
   (v1/v2/v3 schemes).
+
+## World extension + weather/seasons (2026-11-03, on top of the HUD addendum)
+
+User requests: (1) extend the open world, (2) a weather + seasons
+system with the current season set to winter/snow, (3) the standing
+rule — an optimization pass after the update, measured.
+
+### 1) Northgate district (world extension)
+
+The campus north hedge now has a gate gap (x in [-7, 7], twin gate
+pillars + arch) opening onto **Northgate Avenue**, and beyond it one
+connected district with THREE new NPC zones, all on real roads and
+footpaths with full AStar coverage (15 new graph nodes, 14 edges):
+
+- **Northgate Bazaar** (zone `bazaar`, centre (0, -152)): a 250 m
+  market street — 18 shopfronts in two uniform-footprint rows
+  (Northgate Books, Spice House, Mobile World, Chaat Bhandar,
+  Pharmacy Plus, Bakery Fresh…), 6 canopy market stalls with goods
+  crates and boarded signs, plaza, crates, parked cars, a rickshaw,
+  street poles, dustbins, a notice board and a boarded
+  "NORTHGATE BAZAAR" gateway sign in the fix-round style.
+- **North Lake Park** (zone `lakefront`, centre (-106, -146)):
+  lawns, an elliptical lake with stone rim (freezes in winter),
+  promenade paths, a gazebo, flower beds, 10 trees, and 5 benches
+  registered as NPC seat spots.
+- **Northgate Colony** (zone `colony`, centre (88, -128)): a
+  residential street with cul-de-sac loop, 6 named houses (Sharma
+  Niwas, Gupta House, Verma Villa, Khan House, Iyer Home, Patel
+  Niwas), front-yard trees, parked car + scooters.
+
+The district is ALIVE on the same schedule system: 6 background
+students take bazaar evenings, 3 take lakefront club period, 3 take
+colony evenings; mains Anirudh + Aarya (bazaar evenings), Shadow
+(colony evening), Gulshan (lakefront evening), Diya (bazaar club
+period); plus a new stationary staff member, Sunita at the woollen
+stall. Minimap coverage: zone landmark dots for the whole extended
+world (all 17 zone centres) drawn under the blips; the phone Map tab
+lists the new zones; `_player_zone()` resolves them.
+
+### 2) Weather + seasons engine
+
+Built on the Phase 4 table (`Phase4Data.season_for_day /
+seasonal_weather / snow_redirect`): seasons follow the in-game
+calendar (winter Days 1–28, spring 29–56, summer 57–70, monsoon
+71–86) and the **current season is WINTER** — the user's "currently
+will be a snow season". Winter maps the base table's rain to **snow**
+(the base `weather_for_day` is untouched, so the Phase 4 table test
+still passes); monsoon turns most cloudy days wet. Weather states:
+Clear / Cloudy / Rain / Snow, changing per day.
+
+- **Snowfall**: ONE pooled GPUParticles3D emitter (900 flakes)
+  following the camera, same pattern as rain — never per-NPC.
+- **Snow cover**: a merged overlay layer (`World.set_snow_visible`)
+  — roof caps for all 43 buildings, 120 lawn drifts, hedge-top
+  strips (173 instances merged into 2 draws) — plus material swaps:
+  frost tints on all grass materials, frosty tree-canopy material,
+  and open water (garden pond, pool, North Lake) swapped to ice.
+  Driven purely by the season state: it **melts** when the season
+  turns (spring Day 29), no geometry created or destroyed.
+- **Winter light**: pale cool sun, cold fog tint; snowfall days get
+  flat light + thicker cold haze in `_update_sun`.
+- **NPC behaviour**: heavy snow redirects outdoor crowds indoors
+  via `snow_redirect()` (quad→union, garden→library, sports→union,
+  bazaar→shops, lakefront→library, colony→dorm), mirroring rain.
+- **UI**: a compact weather indicator sits next to the HUD clock
+  (❄ Snow / 🌧 Rain / ☁ Cloudy / ☀ Clear); the phone Calendar tab
+  shows season, today's weather and a 3-day forecast; day-start
+  admin messages announce snowfall and season changes. Season +
+  weather persist in saves.
+
+### 3) Optimization pass (standing rule) — measured
+
+All new geometry flows through the same merge-by-material pipeline
+(bazaar/colony buildings use two uniform footprints so their wall
+materials cache-share): world statics **3,747 instances → 199 merged
+draws** (fix round: 2,317 → 152); the snow layer merges separately
+(173 → 2). Draw calls via `--draw-probe` (GL Compatibility under
+xvfb/llvmpipe, same method/viewpoints as the fix round; new variants
+`--probe-north`, `--probe-nosnow`, `--probe-snowfall`):
+
+| Viewpoint | Draw calls |
+|---|---|
+| Campus (0, 9, 42) — fix-round baseline | 4,463 |
+| Campus (0, 9, 42) — this build, snow cover ON | **4,798** (+7.5%, inside the ~10% budget) |
+| Campus — this build, snow OFF (summer override) | 4,788 → **snow-cover delta = 10** |
+| Campus — this build, snowfall emitter ON | 4,798 → **particle delta = 0** |
+| Northgate Bazaar street level (8, 2.2, -140) | **1,723** |
+
+### Verification
+
+- Headless suite on final code (`--campus-test`): exit 0, zero
+  script errors, **43/43** NPC arrivals, TEST_FIX / P2 / P3 / P4 /
+  P5 PASS, semester harness PASS (Day 86, GPA 8.09, ₹9,120), and
+  also PASS under `--touch-test`.
+- New **TEST_WX** markers: (a) season state is winter and snow
+  cover is active, and it melts on season change; (b) an NPC
+  pathfinds quad → Northgate Bazaar over 7 graph waypoints and
+  physically arrives; (c) the calendar transitions Clear→Snow
+  (days 1–14 sequence printed), `_update_sun` renders all four
+  weather states, and the snow redirect sends a lakefront NPC to
+  the library.
+- Screenshots: `preview/shot27_bazaar_street.png` (street level,
+  crowd + stalls + shopfronts), `shot28_snow_avenue.png` (snowfall
+  + snow cover on the avenue), `shot29_snow_closeup.png` (Zannat
+  close-up in falling snow), `shot30_minimap_north.png` (minimap
+  over the bazaar with landmark dots).
+- All three exports refreshed via `tools/export_dual.sh`: Windows
+  Forward+ (exe 84,214,784 B + pck 20,471,104 B), Web Compatibility
+  (pck 20,471,168 B), Android APK 43,129,327 B — `apksigner verify`
+  passes; RENDERER.txt correct in each.
+
+### Honest partials
+
+- Snow cover is an overlay + material-swap system (as specified),
+  not per-surface accumulation; drifts are flattened shapes on
+  lawns, and roofs get flat caps. Grounds keep their path/road
+  surfaces readable (roads are "cleared").
+- Seasons advance with the calendar but there is no player-facing
+  season calendar screen beyond the phone forecast; a debug
+  override exists via the probe flags (`--probe-nosnow`).
+- The bazaar/colony shops are street-front buildings like MG
+  Road's — no new shop interiors or buy interactions were added;
+  Sunita's stall is a staffed landmark, not a shop UI.
+- Headless runs print the dummy-renderer "Parameter m is null"
+  engine ERROR lines that already exist on dbc6eb7 (840 there,
+  1,202 now — they scale with mesh count); script errors are zero
+  in both. No real-GPU FPS is measurable in this VM; the Windows
+  playtest remains the true performance check.

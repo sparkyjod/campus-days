@@ -11,6 +11,7 @@ var player_yaw := 0.0
 var items: Array = [] # each: {"pos": Vector3, "color": Color, "quest": bool}
 var quest_pos := Vector3.ZERO
 var has_quest := false
+var landmarks: Dictionary = {} # zone name -> world centre, set by Main (extended-world coverage)
 
 const RADIUS := 78.0
 const SCALE := 1.15 # px per metre; 78px radius covers ~68 m
@@ -32,6 +33,14 @@ func _draw() -> void:
 	# north tick
 	draw_line(c + Vector2(0, -RADIUS + 4.0), c + Vector2(0, -RADIUS + 12.0), Color(1, 1, 1, 0.8), 2.0)
 	draw_string(ThemeDB.fallback_font, c + Vector2(-4, -RADIUS + 22.0), "N", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1, 1, 1, 0.85))
+	# Zone landmark dots: every district of the extended world (campus
+	# + MG Road + Northgate) shows as a soft dot when in range, so the
+	# larger map still reads at a glance.
+	for z in landmarks:
+		var lp: Vector3 = landmarks[z]
+		var loff := Vector2(lp.x - player_pos.x, lp.z - player_pos.z) * SCALE
+		if loff.length() < RADIUS - 6.0:
+			draw_circle(c + loff, 3.0, Color(0.75, 0.85, 1.0, 0.45))
 	for it in items:
 		var d: Dictionary = it
 		var rel: Vector3 = (d["pos"] as Vector3) - player_pos

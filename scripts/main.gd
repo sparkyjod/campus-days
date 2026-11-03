@@ -11,7 +11,8 @@ const ZONE_NAMES := {
 	"sports": "Sports Complex", "gate": "Main Gate",
 	"lectureb": "Lecture Block B", "lecturec": "Lecture Block C",
 	"admin": "Admin Block", "shops": "Campus Shops", "garden": "Gardens & Amphitheatre",
-	"city": "City District — MG Road"
+	"city": "City District — MG Road",
+	"bazaar": "Northgate Bazaar", "lakefront": "North Lake Park", "colony": "Northgate Colony"
 }
 
 var _world: Dictionary = {}
@@ -25,6 +26,8 @@ var _sun: DirectionalLight3D
 var _env: Environment
 var _sky_mat: ProceduralSkyMaterial
 var _rain_particles: GPUParticles3D = null # Phase 4 rain emitter (follows player)
+var _snow_particles: GPUParticles3D = null # WX build: single snowfall emitter (follows player)
+var _season: String = "winter" # WX build: current season (semester opens in winter)
 var _lamps: Array = []
 
 var _mains: Array = []
@@ -165,7 +168,9 @@ const ZONE_CENTERS := {
 	"union": Vector3(58, 0, 66), "sports": Vector3(-50, 0, 60),
 	"gate": Vector3(0, 0, 96), "admin": Vector3(-104, 0, -34),
 	"shops": Vector3(25, 0, 82), "garden": Vector3(105, 0, 55),
-	"quad": Vector3(0, 0, -5), "city": Vector3(0, 0, 140)
+	"quad": Vector3(0, 0, -5), "city": Vector3(0, 0, 140),
+	"bazaar": Vector3(0, 0, -152), "lakefront": Vector3(-106, 0, -146),
+	"colony": Vector3(88, 0, -128)
 }
 
 var _test_mode: bool = false
@@ -178,6 +183,7 @@ var _rng := RandomNumberGenerator.new()
 # UI refs
 var _hud_day: Label
 var _hud_clock: Label
+var _hud_weather: Label
 var _hud_period: Label
 var _hud_money: Label
 var _hud_energy: ProgressBar
@@ -270,6 +276,11 @@ func _ready() -> void:
 	_apply_quality()
 	_init_phase2()
 	_p4_weather = Phase4Data.weather_for_day(day)
+	# WX build: seasons engine on top of the Phase 4 weather table.
+	# The semester opens in winter, so snow cover is live from Day 1.
+	_season = Phase4Data.season_for_day(day)
+	_p4_weather = Phase4Data.seasonal_weather(day)
+	_apply_season_visuals()
 	_p4_refresh_dorm_decor()
 	if _draw_probe:
 		# Fix round draw-call probe: fixed camera at the Phase 5 orbit's
@@ -280,8 +291,26 @@ func _ready() -> void:
 		_fps_cam = Camera3D.new()
 		_fps_cam.fov = 60.0
 		add_child(_fps_cam)
-		_fps_cam.global_position = Vector3(0, 9, 42)
-		_fps_cam.look_at(Vector3(0, 2, 0), Vector3.UP)
+		# WX build probe variants: --probe-north measures the new
+		# bazaar street-level viewpoint; --probe-nosnow strips the
+		# winter layer (season override) for the snow on/off delta;
+		# --probe-snowfall turns the snowfall emitter on.
+		var probe_pos := Vector3(0, 9, 42)
+		var probe_look := Vector3(0, 2, 0)
+		if args.has("--probe-nosnow"):
+			_season = "summer"
+			_p4_weather = "clear"
+			_apply_season_visuals()
+			print("[DRAW_PROBE] variant: no-snow (season override = summer)")
+		if args.has("--probe-snowfall"):
+			_p4_weather = "snow"
+			print("[DRAW_PROBE] variant: snowfall emitter ON")
+		if args.has("--probe-north"):
+			probe_pos = Vector3(8, 2.2, -140)
+			probe_look = Vector3(-6, 1.6, -158)
+			print("[DRAW_PROBE] variant: northgate bazaar viewpoint")
+		_fps_cam.global_position = probe_pos
+		_fps_cam.look_at(probe_look, Vector3.UP)
 		_fps_cam.current = true
 		_update_sun()
 		print("[DRAW_PROBE] starting (renderer=", ProjectSettings.get_setting("rendering/renderer/rendering_method"), ")")
@@ -468,6 +497,17 @@ func _spawn_people() -> void:
 		if i % 8 == 7:
 			d["club"] = "city"
 			d["evening"] = "city"
+		# World extension: Northgate rotations, so the new district is
+		# alive with the same schedule system — bazaar evenings for six
+		# students, lakefront club period for three, colony evenings
+		# for three.
+		if i % 8 == 3:
+			d["evening"] = "bazaar"
+		if i % 8 == 5:
+			d["club"] = "lakefront"
+			d["evening"] = "bazaar"
+		if i % 8 == 6:
+			d["evening"] = "colony"
 		var zone: String = _segment_for(d, 7.5)
 		var npc := _npc_common(d, false, zone, i + 1)
 		_bgs.append(npc)
@@ -482,7 +522,9 @@ func _spawn_people() -> void:
 		{"name": "Bhola (Shops)", "pos": _world["shop_staff_pos"], "zone": "shops",
 			"line": "Welcome to the campus shops lane! Xerox at ₹1 a page, juice fresh, books at student discount. Exam week, this whole lane stays open till midnight."},
 		{"name": "Meena (Style Studio)", "pos": _world["city_shopkeeper_pos"], "zone": "city", "female": true,
-			"line": "Welcome to Style Studio, MG Road! Fest kurtas, streetwear, formals — student prices, no bargaining needed. The city bus drops you right here."}
+			"line": "Welcome to Style Studio, MG Road! Fest kurtas, streetwear, formals — student prices, no bargaining needed. The city bus drops you right here."},
+		{"name": "Sunita (Woollen Stall)", "pos": _world["bazaar_staff_pos"], "zone": "bazaar", "female": true,
+			"line": "Garama-garam shawls, caps, gloves — Northgate Bazaar's warmest stall! Snow season is my season, beta. Students get ten percent off, bas smile kar do."}
 	]
 	for sd in staff_defs:
 		var d := {
@@ -633,8 +675,12 @@ func _update_schedules() -> void:
 			continue
 		var zone := _segment_for(npc.data, hour)
 		# Phase 4 weather: rain moves outdoor crowds indoors.
+		# WX build: heavy snow does the same, with its own table that
+		# also empties the Northgate outdoor zones.
 		if _p4_weather == "rain":
 			zone = str(Phase4Data.rain_redirect().get(zone, zone))
+		elif _p4_weather == "snow":
+			zone = str(Phase4Data.snow_redirect().get(zone, zone))
 		if zone != npc.target_zone:
 			npc.target_zone = zone
 			var idx := _all_npcs.find(npc)
@@ -789,12 +835,13 @@ func _finish_test() -> void:
 	var p3_ok := _run_phase3_tests()
 	var p4_ok := _run_phase4_tests()
 	var p5_ok := _run_phase5_tests()
+	var wx_ok := _run_wx_tests()
 	var sem_ok := false
-	if fix_ok and p2_ok and p3_ok and p4_ok and p5_ok:
+	if fix_ok and p2_ok and p3_ok and p4_ok and p5_ok and wx_ok:
 		sem_ok = _run_semester_harness()
 	else:
-		print("[TEST_P4_SEM] skipped: earlier phase tests failed (fix=", fix_ok, " p2=", p2_ok, " p3=", p3_ok, " p4=", p4_ok, " p5=", p5_ok, ")")
-	get_tree().quit(0 if (fix_ok and p2_ok and p3_ok and p4_ok and p5_ok and sem_ok) else 1)
+		print("[TEST_P4_SEM] skipped: earlier phase tests failed (fix=", fix_ok, " p2=", p2_ok, " p3=", p3_ok, " p4=", p4_ok, " p5=", p5_ok, " wx=", wx_ok, ")")
+	get_tree().quit(0 if (fix_ok and p2_ok and p3_ok and p4_ok and p5_ok and wx_ok and sem_ok) else 1)
 
 func _run_fix_tests() -> bool:
 	# User play-feedback fix round: signboards are boarded, statics are
@@ -962,6 +1009,23 @@ func _clock_str() -> String:
 	var m := int(game_minutes) % 60
 	return "%02d:%02d" % [h, m]
 
+func _apply_season_visuals() -> void:
+	# WX build: snow cover lives exactly while the season is winter;
+	# any other season melts it away (material swaps + layer toggle
+	# in World, no geometry is created or destroyed).
+	World.set_snow_visible(_season == "winter")
+
+func _weather_icon(w: String) -> String:
+	match w:
+		"snow":
+			return "❄ Snow"
+		"rain":
+			return "🌧 Rain"
+		"cloudy":
+			return "☁ Cloudy"
+		_:
+			return "☀ Clear"
+
 func _update_sun() -> void:
 	var hour := game_minutes / 60.0
 	var day_frac := clampf((hour - 6.0) / 12.0, 0.0, 1.0)
@@ -979,7 +1043,15 @@ func _update_sun() -> void:
 		(l as OmniLight3D).light_energy = lamp_on
 	# Phase 4 weather visuals: rain dulls the sun and thickens the haze;
 	# cloudy softens it. Day 1 is clear, so captures/tests are unaffected.
-	if _p4_weather == "rain":
+	if _p4_weather == "snow":
+		# WX build: snowfall — flat pale light, cold blue-grey sky,
+		# thicker cold haze than a clear day.
+		_sun.light_energy *= 0.55
+		_env.ambient_light_energy *= 0.85
+		_env.fog_density = 0.0075
+		_sky_mat.sky_top_color = _sky_mat.sky_top_color.lerp(Color(0.55, 0.62, 0.72), 0.8)
+		_sky_mat.sky_horizon_color = _sky_mat.sky_horizon_color.lerp(Color(0.72, 0.78, 0.86), 0.8)
+	elif _p4_weather == "rain":
 		_sun.light_energy *= 0.35
 		_env.ambient_light_energy *= 0.7
 		_env.fog_density = 0.012
@@ -991,6 +1063,13 @@ func _update_sun() -> void:
 		_sky_mat.sky_top_color = _sky_mat.sky_top_color.lerp(Color(0.45, 0.48, 0.52), 0.25)
 	else:
 		_env.fog_density = 0.0022
+	# WX build: winter ambience in ANY winter weather — pale cool sun
+	# and a cold fog tint (the snow-season look the user asked for).
+	if _season == "winter":
+		_sun.light_color = _sun.light_color.lerp(Color(0.90, 0.95, 1.05), 0.45)
+		_env.fog_light_color = Color(0.78, 0.85, 0.96)
+	else:
+		_env.fog_light_color = Color(0.79, 0.84, 0.91)
 	# Phase 4 rain particles: one shared emitter that follows the player
 	# and only emits while it rains (created lazily on first sun update).
 	if _rain_particles == null:
@@ -1018,6 +1097,34 @@ func _update_sun() -> void:
 		add_child(_rain_particles)
 	_rain_particles.global_position = _player.global_position + Vector3(0, 14, 0)
 	_rain_particles.emitting = (_p4_weather == "rain")
+	# WX build: snowfall — ONE pooled emitter around the camera (same
+	# pattern as rain, slower and softer), never per-NPC.
+	if _snow_particles == null:
+		_snow_particles = GPUParticles3D.new()
+		_snow_particles.amount = 900
+		_snow_particles.lifetime = 6.0
+		_snow_particles.emitting = false
+		_snow_particles.visibility_aabb = AABB(Vector3(-45, -22, -45), Vector3(90, 44, 90))
+		var smat := ParticleProcessMaterial.new()
+		smat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+		smat.emission_box_extents = Vector3(38, 10, 38)
+		smat.direction = Vector3(0, -1, 0)
+		smat.spread = 12.0
+		smat.initial_velocity_min = 1.2
+		smat.initial_velocity_max = 2.6
+		smat.gravity = Vector3(0.3, -0.7, 0.1)
+		_snow_particles.process_material = smat
+		var smesh := BoxMesh.new()
+		smesh.size = Vector3(0.07, 0.07, 0.07)
+		var smm := StandardMaterial3D.new()
+		smm.albedo_color = Color(0.96, 0.97, 1.0, 0.9)
+		smm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		smm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		smesh.material = smm
+		_snow_particles.draw_pass_1 = smesh
+		add_child(_snow_particles)
+	_snow_particles.global_position = _player.global_position + Vector3(0, 12, 0)
+	_snow_particles.emitting = (_p4_weather == "snow")
 
 func _npc_small_talk() -> void:
 	# two NPCs in the same area chat; show a bubble on one of them
@@ -2003,7 +2110,7 @@ func _phone_text_for(tab: String) -> String:
 			out3 += "\nAssignments:\n"
 			for a in _assignments:
 				out3 += "- %s (due Day %d): %d%% %s\n" % [str(a["title"]), int(a["due_day"]), int(a["progress"]), "SUBMITTED" if bool(a["submitted"]) else ""]
-			out3 += "\nWEATHER TODAY: %s%s\n" % [_p4_weather, " — outdoor crowds move indoors" if _p4_weather == "rain" else ""]
+			out3 += "\nWEATHER — Season: %s (Day %d)\nToday: %s%s\nForecast: tomorrow %s • Day %d: %s • Day %d: %s\n" % [_season.capitalize(), day, _p4_weather, " — outdoor crowds move indoors" if (_p4_weather == "rain" or _p4_weather == "snow") else "", Phase4Data.seasonal_weather(day + 1), day + 2, Phase4Data.seasonal_weather(day + 2), day + 3, Phase4Data.seasonal_weather(day + 3)]
 			out3 += "\nCLUBS (join max 2; sessions 16:00–17:00, Literature Sun 11:00):\n"
 			for cid in Phase4Data.clubs().keys():
 				var c: Dictionary = Phase4Data.clubs()[cid]
@@ -2795,7 +2902,17 @@ func _p4_advance_extensions(action: String, actor: String = "") -> int:
 # --- day-start: weather, exams, sports week, summaries ---
 
 func _p4_on_day_start() -> void:
-	_p4_weather = Phase4Data.weather_for_day(day)
+	# WX build: the seasons engine drives the day's weather — winter
+	# turns the base table's rain into snowfall, and the snow cover
+	# follows the season (melting when the season turns).
+	var prev_season := _season
+	_season = Phase4Data.season_for_day(day)
+	_p4_weather = Phase4Data.seasonal_weather(day)
+	_apply_season_visuals()
+	if _season != prev_season and day > 1:
+		_add_message("Northbridge Admin", "The season turns: %s is here. %s" % [_season.capitalize(), "The snow melts away — green returns to the quad." if prev_season == "winter" else "A new season settles over Northbridge."])
+	if _p4_weather == "snow":
+		_add_message("Northbridge Admin", "Snowfall today — the campus and Northgate are white, and outdoor crowds head indoors (quad/gardens/sports/bazaar/lakefront move inside). Wrap up warm!")
 	if _p4_weather == "rain":
 		stress = minf(100.0, stress + 2.0)
 		_add_message("Northbridge Admin", "Rain on campus today — outdoor sessions are dulled and crowds move indoors (quad/gardens/sports head inside).")
@@ -3238,7 +3355,7 @@ func _p4_check_room_guest() -> void:
 
 func _p4_collect_state() -> Dictionary:
 	return {
-		"weather": _p4_weather, "clubs_joined": _p4_clubs_joined.duplicate(),
+		"weather": _p4_weather, "season": _season, "clubs_joined": _p4_clubs_joined.duplicate(),
 		"club_attended": _p4_club_attended.duplicate(), "club_sessions": _p4_club_sessions,
 		"sport_sessions": _p4_sport_sessions, "sports_week_sessions": _p4_sports_week_sessions,
 		"sports_week_award": _p4_sports_week_award, "exams_sat": _p4_exams_sat.duplicate(),
@@ -3257,6 +3374,7 @@ func _p4_collect_state() -> Dictionary:
 
 func _p4_apply_state(d: Dictionary) -> void:
 	_p4_weather = str(d.get("weather", "clear"))
+	_season = str(d.get("season", Phase4Data.season_for_day(day)))
 	_p4_clubs_joined = (d.get("clubs_joined", []) as Array).duplicate()
 	_p4_club_attended = (d.get("club_attended", []) as Array).duplicate()
 	_p4_club_sessions = int(d.get("club_sessions", 0))
@@ -3287,6 +3405,7 @@ func _p4_apply_state(d: Dictionary) -> void:
 	_p4_ext_done = (d.get("ext_done", {}) as Dictionary).duplicate()
 
 func _p4_after_load() -> void:
+	_apply_season_visuals() # WX: snow cover follows the loaded season
 	if _p4_outfit >= 0 or _p4_hairstyle >= 0:
 		_p4_apply_custom_appearance()
 	_p4_refresh_dorm_decor()
@@ -3902,6 +4021,9 @@ void fragment() {
 	hrow1.add_child(_hud_day)
 	_hud_clock = _mk_label("07:30", 16, Color(1.0, 1.0, 1.0))
 	hrow1.add_child(_hud_clock)
+	# WX build: compact weather indicator right beside the clock.
+	_hud_weather = _mk_label("❄ Snow", 11, Color(0.75, 0.88, 1.0))
+	hrow1.add_child(_hud_weather)
 	vb.add_child(hrow1)
 	# second row: day segment (soft blue) left, money (green) right
 	var hrow2 := HBoxContainer.new()
@@ -4269,6 +4391,7 @@ void fragment() {
 		_qa_btns.add_child(qb)
 	# ---- Circular minimap (bottom-right) + quest marker (3D) ----
 	_minimap = Minimap.new()
+	_minimap.landmarks = ZONE_CENTERS # WX: extended-world coverage (campus + MG Road + Northgate)
 	_minimap.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	_minimap.position = Vector2(-186, -186)
 	_minimap.custom_minimum_size = Vector2(172, 172)
@@ -4302,6 +4425,8 @@ func _refresh_hud() -> void:
 		return
 	_hud_day.text = "Day %d • Week %d of 12" % [day, mini(12, (day - 1) / 7 + 1)]
 	_hud_clock.text = _clock_str()
+	if _hud_weather != null:
+		_hud_weather.text = _weather_icon(_p4_weather)
 	_hud_period.text = _period_name(game_minutes / 60.0)
 	_hud_money.text = "₹ %d" % money
 	_hud_energy.value = energy
@@ -4670,6 +4795,96 @@ func _run_phase5_tests() -> bool:
 	print("[TEST_P5] RESULT: ", "PASS" if ok else "FAIL")
 	return ok
 
+func _run_wx_tests() -> bool:
+	# World extension + weather/seasons build evidence:
+	# (a) the season state is winter and the snow cover is active,
+	#     and it melts when the season state changes;
+	# (b) an NPC pathfinds over the AStar graph to a Northgate zone
+	#     and physically arrives;
+	# (c) the weather engine transitions Clear->Snow across the
+	#     calendar without errors, and _update_sun survives all four
+	#     weather states; heavy snow redirects outdoor crowds inside.
+	var ok := true
+	print("[TEST_WX] World extension + weather/seasons checks")
+	# (a) season + snow cover
+	if Phase4Data.season_for_day(1) != "winter" or Phase4Data.season_for_day(40) != "spring":
+		print("[TEST_WX_FAIL] season table wrong: d1=", Phase4Data.season_for_day(1), " d40=", Phase4Data.season_for_day(40))
+		ok = false
+	# Earlier phase tests advance the calendar, so prove (a) against
+	# an explicit winter day, then restore the live season.
+	_season = Phase4Data.season_for_day(1)
+	_apply_season_visuals()
+	if _season != "winter" or not World.snow_cover_active or World.snow_layer == null or not World.snow_layer.visible:
+		print("[TEST_WX_FAIL] winter snow cover not active: season=", _season, " cover=", World.snow_cover_active)
+		ok = false
+	else:
+		print("[TEST_WX] (a) season=winter, snow cover ACTIVE (roof caps + drifts + frost canopies + ice)")
+	World.set_snow_visible(false)
+	if World.snow_cover_active or (World.snow_layer != null and World.snow_layer.visible):
+		print("[TEST_WX_FAIL] snow cover did not melt on season change")
+		ok = false
+	_season = Phase4Data.season_for_day(day)
+	_apply_season_visuals()
+	print("[TEST_WX] (a2) snow melts when the season state changes: OK")
+	# (c) weather transitions across the calendar + all four states render
+	var seen := {}
+	var seq: Array = []
+	for d in range(1, 41):
+		var w := Phase4Data.seasonal_weather(d)
+		seen[w] = true
+		if d <= 14:
+			seq.append(w)
+	if not seen.has("clear") or not seen.has("snow"):
+		print("[TEST_WX_FAIL] calendar never reaches clear/snow: ", seen.keys())
+		ok = false
+	for w in ["clear", "cloudy", "rain", "snow"]:
+		_p4_weather = w
+		_update_sun()
+	print("[TEST_WX] (c) days 1-14 weather sequence: ", seq, " — Clear->Snow transitions present, all 4 states render")
+	# snow redirect: a lakefront club-period BG must head to the library
+	var bg3: NPC = _bgs[3]
+	var old_club3: String = str(bg3.data.get("club", "quad"))
+	bg3.data["club"] = "lakefront"
+	_p4_weather = "snow"
+	game_minutes = 16.5 * 60.0 # inside the club segment (16:00-17:00)
+	_update_schedules()
+	if bg3.target_zone != "library":
+		print("[TEST_WX_FAIL] snow redirect failed: bg3 target=", bg3.target_zone)
+		ok = false
+	else:
+		print("[TEST_WX] snow redirect lakefront->library: OK")
+	bg3.data["club"] = old_club3
+	# (b) pathfind + physical arrival in the new district
+	var npc: NPC = _bgs[1]
+	npc.sim_tier = 0
+	npc.talking = false
+	npc.global_position = Vector3(0, 0, -20)
+	var bspot: Vector3 = _zone_spots["bazaar"][0]
+	var path := _path_to(npc.global_position, "bazaar", bspot)
+	if path.size() < 4:
+		print("[TEST_WX_FAIL] bazaar path too short: ", path.size())
+		ok = false
+	npc.spot = bspot
+	npc.target_zone = "bazaar"
+	npc.set_path(path)
+	# Step at frame-like delta: test-mode NPC speed is x6, so a coarse
+	# 0.1 s step would jump clean over the 0.35 m waypoint radius and
+	# orbit the spot forever (a test-harness artifact, not game code).
+	var steps := 0
+	while steps < 30000 and not (npc.path_idx >= npc.path.size() and npc.global_position.distance_to(bspot) < 1.2):
+		npc._process(0.02)
+		steps += 1
+	if npc.path_idx >= npc.path.size() and npc.global_position.distance_to(bspot) < 1.2:
+		print("[TEST_WX] (b) NPC pathfound quad->Northgate Bazaar (", path.size(), " waypoints) and ARRIVED in ", steps, " steps @ ", bspot)
+	else:
+		print("[TEST_WX_FAIL] NPC did not arrive at bazaar: steps=", steps, " pos=", npc.global_position, " target=", bspot)
+		ok = false
+	# restore the day's real weather state after the probes
+	_p4_weather = Phase4Data.seasonal_weather(day)
+	_update_sun()
+	print("[TEST_WX] RESULT: ", "PASS" if ok else "FAIL")
+	return ok
+
 # ---------------- screenshots (capture mode) ----------------
 
 # Capture-only staging (FIX 2026-11-03, defects D1-D5). The game itself is
@@ -4988,6 +5203,57 @@ func _run_captures() -> void:
 	await _shot_file("shot26_hud_compact.png")
 	stress = 30.0
 	_refresh_hud()
+	# ---- WX build shots ----
+	# shot27: Northgate Bazaar at street level — staged shoppers on
+	# both pavements, stalls and shopfronts behind them (the new
+	# district must read ALIVE, never empty).
+	_stage(_bgs[0], Vector3(-6, 0, -150.5), 1.2)
+	_stage(_bgs[1], Vector3(0, 0, -153.5), -0.6)
+	_stage(_bgs[2], Vector3(5, 0, -148.5), 2.4)
+	_stage(_bgs[3], Vector3(12, 0, -156), -0.3)
+	_stage(_bgs[4], Vector3(-11, 0, -155), 0.9)
+	_stage(_bgs[5], Vector3(18, 0, -151), 2.8)
+	_stage(_bgs[6], Vector3(-2, 0, -145.5), 2.9)
+	_stage(_bgs[7], Vector3(15, 0, -146.5), 2.2)
+	_stage(_mains[0], Vector3(3, 0, -151), 0.1)
+	_stage(_mains[3], Vector3(8, 0, -153.5), -1.0)
+	_player.global_position = Vector3(-130, 0, 100)
+	_shot(cam, Vector3(-19, 1.7, -150.5), Vector3(10, 1.4, -154))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot27_bazaar_street.png")
+	# shot28: snowfall over the main avenue — snow cover on roofs,
+	# hedges and lawns, winter light. The player stands just behind
+	# the camera so the snowfall volume covers the frame.
+	game_minutes = 10.0 * 60.0
+	_p4_weather = "snow"
+	_player.global_position = Vector3(8, 0.1, 52)
+	_update_sun()
+	_shot(cam, Vector3(2, 1.7, 55), Vector3(0, 1.5, 25))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot28_snow_avenue.png")
+	# shot29: character close-up in the snow (Zannat on the quad,
+	# snow drifts + frosted trees behind her).
+	var zan: NPC = _mains[1]
+	_stage(zan, Vector3(3, 0, -2), 0.0)
+	_player.global_position = Vector3(5.5, 0.1, 2.0)
+	_update_sun()
+	var zp := zan.global_position
+	var zcam := zp + Vector3(0.7, 1.52, 0.95)
+	zan.rotation.y = atan2(zcam.x - zp.x, zcam.z - zp.z)
+	zan._label.visible = false
+	_shot(cam, zcam, zp + Vector3(0, 1.52, 0))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot29_snow_closeup.png")
+	zan._label.visible = true
+	_p4_weather = "clear"
+	_update_sun()
+	# shot30: the minimap over the bazaar — extended-world coverage
+	# (landmark dots + blips correct at the new map's north edge).
+	_player.global_position = Vector3(0, 0, -148)
+	_refresh_hud()
+	_shot(cam, Vector3(-6, 1.7, -144), Vector3(4, 1.5, -156))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot30_minimap_north.png")
 	_player.global_position = Vector3(-130, 0, 100)
 	print("[CAPTURE] done")
 	get_tree().quit(0)

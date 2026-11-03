@@ -19,7 +19,7 @@ static func mains() -> Array:
 			"personality": "Curious, witty, builder mindset — talks in ideas and plans.",
 			"hobby": "building apps and late-night coding jams",
 			"friends": "Jatin, Diya", "rival": "Chirag (friendly tech-vs-business rivalry)",
-			"morning": "dorm", "am1": "lecture", "am2": "lecture", "pm": "library", "club": "union", "evening": "quad", "night": "library",
+			"morning": "dorm", "am1": "lecture", "am2": "lecture", "pm": "library", "club": "union", "evening": "bazaar", "night": "library",
 			"chat": [
 				"Arre, I just got my code to compile on the first try. Today is a good day, I'm telling you.",
 				"I'm prototyping a campus app — timetables, canteen menu, everything. Want to beta-test it?",
@@ -119,7 +119,7 @@ static func mains() -> Array:
 			"personality": "Quiet, observant, mysterious — few words, deep when he opens up.",
 			"hobby": "painting the campus at dusk and old vinyl records",
 			"friends": "Gulshan, Diya", "rival": "No one — he competes with his last painting",
-			"morning": "dorm", "am1": "lecture", "am2": "quad", "pm": "quad", "club": "union", "evening": "quad", "night": "dorm",
+			"morning": "dorm", "am1": "lecture", "am2": "quad", "pm": "quad", "club": "union", "evening": "colony", "night": "dorm",
 			"chat": [
 				"...The light on the library steps right now. Look at it. That's a painting waiting.",
 				"People rush everywhere here. Nobody watches the campus actually breathe.",
@@ -139,7 +139,7 @@ static func mains() -> Array:
 			"personality": "Warm storyteller, poetic — long, thoughtful replies.",
 			"hobby": "poetry, old ghazals and collecting strangers' stories",
 			"friends": "Shadow, Zannat", "rival": "Deadlines — his poems never meet them",
-			"morning": "quad", "am1": "library", "am2": "lecture", "pm": "library", "club": "union", "evening": "quad", "night": "library",
+			"morning": "quad", "am1": "library", "am2": "lecture", "pm": "library", "club": "union", "evening": "lakefront", "night": "library",
 			"chat": [
 				"I heard the most beautiful line in the library today — someone returning a book said, 'It kept me company.' Books do that, don't they?",
 				"Every person on this campus is a story walking around in shoes. I just try to read a few pages of each.",
@@ -179,7 +179,7 @@ static func mains() -> Array:
 			"personality": "Organised, design-obsessed — precise, visual thinker.",
 			"hobby": "sketching buildings and collecting stationery",
 			"friends": "Yumi, Shadow", "rival": "Crooked lines and last-minute model making",
-			"morning": "quad", "am1": "lecture", "am2": "library", "pm": "quad", "club": "quad", "evening": "quad", "night": "dorm",
+			"morning": "quad", "am1": "lecture", "am2": "library", "pm": "quad", "club": "bazaar", "evening": "quad", "night": "dorm",
 			"chat": [
 				"Look at the library facade — those columns carry the whole elevation. I sketched it six times before I got the proportions right.",
 				"I have strong opinions about this campus's pathways. The quad diagonal? Genius. The hostel bottleneck? A crime.",
@@ -199,7 +199,7 @@ static func mains() -> Array:
 			"personality": "Ambitious, disciplined, finance-brain — direct, numbers-aware.",
 			"hobby": "stock-market paper trading and 6 AM runs",
 			"friends": "Zannat, Shreya", "rival": "Anyone who calls budgeting 'boring'",
-			"morning": "sports", "am1": "lecture", "am2": "library", "pm": "lecture", "club": "union", "evening": "foodcourt", "night": "dorm",
+			"morning": "sports", "am1": "lecture", "am2": "library", "pm": "lecture", "club": "union", "evening": "bazaar", "night": "dorm",
 			"chat": [
 				"Ran 5K before breakfast, reviewed my portfolio over chai, attended two lectures. Discipline is a schedule, not a mood.",
 				"I made a budgeting sheet for our whole friend group. Three people cried. Then they thanked me.",

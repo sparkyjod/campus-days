@@ -80,6 +80,40 @@ static func weather_for_day(d: int) -> String:
 static func rain_redirect() -> Dictionary:
 	return {"quad": "union", "garden": "library", "sports": "union"}
 
+# --- World extension + weather/seasons build: seasons engine --------
+# The semester opens in December, so the CURRENT season is WINTER
+# (user: "currently will be a snow season"). Seasons follow the
+# in-game calendar; seasonal_weather() maps the deterministic base
+# table through the season: winter turns rain into snowfall, monsoon
+# turns most cloudy days wet. weather_for_day() itself is unchanged,
+# so the Phase 4 table test (day 1 clear, days 7/10 rain) still holds.
+static func season_for_day(d: int) -> String:
+	if d <= 28:
+		return "winter"
+	if d <= 56:
+		return "spring"
+	if d <= 70:
+		return "summer"
+	return "monsoon"
+
+static func seasonal_weather(d: int) -> String:
+	var base := weather_for_day(d)
+	match season_for_day(d):
+		"winter":
+			return "snow" if base == "rain" else base
+		"monsoon":
+			if base == "cloudy" and (d * 17 + 3) % 10 < 6:
+				return "rain"
+			return base
+	return base
+
+static func snow_redirect() -> Dictionary:
+	# Heavy snow sends outdoor crowds indoors, like rain — extended to
+	# the Northgate zones: the bazaar crowds step into the campus shops,
+	# the lakefront empties to the library, the colony heads home.
+	return {"quad": "union", "garden": "library", "sports": "union",
+		"bazaar": "shops", "lakefront": "library", "colony": "dorm"}
+
 # ---------------- city district (Section 15.3) ----------------
 # MG Road beyond the Main Gate: clothing store, café street, apartments,
 # park, bus stop with the Route 12 bus back to campus.

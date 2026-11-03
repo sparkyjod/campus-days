@@ -115,6 +115,45 @@ static var sign_board_count: int = 0
 static var merged_statics_from: int = 0 # fix round: merge evidence for tests
 static var merged_statics_into: int = 0 # fix-round test evidence
 
+# World extension + weather/seasons build: the snow-cover system.
+# Snow is a MERGED overlay layer (roof caps noted by _building, lawn
+# drifts, hedge tops) built after the main merge so it stays a single
+# toggleable node; grass materials get a frost tint swap, tree
+# canopies swap to a frosty material, and open water swaps to ice.
+# All driven by set_snow_visible() — zero new geometry at runtime,
+# and the layer merges into a handful of draw calls.
+static var snow_layer: Node3D = null
+static var snow_cover_active: bool = false
+static var _snow_tints: Array = [] # [material, normal_color, winter_color]
+static var _canopy_mmis: Array = []
+static var _canopy_leaf_mats: Array = []
+static var _ice_mis: Array = [] # [mesh_instance, water_material]
+static var _roof_caps: Array = [] # [center, w, d, cap_center_y]
+
+static func _register_snow_tint(mat: Material) -> void:
+	if mat is StandardMaterial3D:
+		var n: Color = (mat as StandardMaterial3D).albedo_color
+		var w := Color(clampf(n.r * 0.80 + 0.10, 0.0, 1.05), clampf(n.g * 0.88 + 0.10, 0.0, 1.05), clampf(n.b * 1.05 + 0.14, 0.0, 1.1))
+		_snow_tints.append([mat, n, w])
+
+static func _register_ice(mi: MeshInstance3D) -> void:
+	_ice_mis.append([mi, mi.material_override])
+
+static func set_snow_visible(on: bool) -> void:
+	snow_cover_active = on
+	if snow_layer != null:
+		snow_layer.visible = on
+	for e in _snow_tints:
+		(e[0] as StandardMaterial3D).albedo_color = e[2] if on else e[1]
+	var frost_m := TexGen.mat_color(Color(0.72, 0.80, 0.78), 1.0)
+	var i := 0
+	for mmi in _canopy_mmis:
+		(mmi as MultiMeshInstance3D).material_override = frost_m if on else _canopy_leaf_mats[i]
+		i += 1
+	var ice_m := TexGen.mat_color(Color(0.80, 0.88, 0.97), 0.28)
+	for e2 in _ice_mis:
+		(e2[0] as MeshInstance3D).material_override = ice_m if on else e2[1]
+
 static func _sign(text: String, pos: Vector3, size_px: int = 96, color: Color = Color(1, 1, 1), rot_y: float = 0.0, boarded: bool = true, posts: bool = false) -> void:
 	# Fix round (user play feedback, item 3): professional signboards.
 	# The old naked Label3D (pixel_size 0.01, double-sided) rendered
@@ -270,6 +309,7 @@ static func _building(cfg: Dictionary) -> void:
 	_box(trim_m, Vector3(center.x, h - 0.25, center.z), Vector3(w + 0.3, 0.5, d + 0.3), false)
 	_box(trim_m, Vector3(center.x, h + 0.02, center.z), Vector3(w + 0.62, 0.22, d + 0.62), false)
 	_box(roof_m, Vector3(center.x, h + 0.22, center.z), Vector3(w + 1.0, 0.45, d + 1.0), true)
+	_roof_caps.append([center, w, d, h + 0.50]) # snow layer caps this roof in winter
 	_box(roof_m, Vector3(center.x, h + 0.75, center.z), Vector3(w * 0.5, 0.7, d * 0.55), false)
 	# parapet railing on taller blocks
 	if h >= 9.0:
@@ -444,6 +484,8 @@ static func _finalize_canopies() -> void:
 		inst.material_override = TexGen.mat_color(leaf_cols[shade], 1.0)
 		inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		_parent.add_child(inst)
+		_canopy_mmis.append(inst)
+		_canopy_leaf_mats.append(TexGen.mat_color(leaf_cols[shade], 1.0))
 	_tree_canopies = [[], [], []]
 
 static func _mesh_key(m: Mesh) -> String:
@@ -586,8 +628,10 @@ static func build(parent: Node3D) -> Dictionary:
 	var seats: Dictionary = {"quad": [], "garden": []}
 
 	var grass_m := TexGen.mat_tex(TexGen.tex_grass(), Color.WHITE, Vector2(90, 68))
+	_register_snow_tint(grass_m)
 	var pave_m := TexGen.mat_tex(TexGen.tex_paving(), Color.WHITE, Vector2(30, 30))
 	var quad_m := TexGen.mat_tex(TexGen.tex_grass(), Color(1.05, 1.02, 0.9), Vector2(46, 30))
+	_register_snow_tint(quad_m)
 	var asphalt_m := TexGen.mat_tex(TexGen.tex_asphalt(), Color.WHITE, Vector2(26, 26))
 	var paint_m := TexGen.mat_color(Color(0.94, 0.94, 0.92), 0.75)
 	var kerb_m := TexGen.mat_tex(TexGen.tex_concrete(), Color(0.92, 0.90, 0.86), Vector2(20, 0.4))
@@ -596,7 +640,9 @@ static func build(parent: Node3D) -> Dictionary:
 	_ground_plane(grass_m, Vector3(0, 0, 0), Vector2(280, 210))
 	_add_box_shape(Vector3(0, -0.6, 0), Vector3(280, 1.0, 210))
 	var hedge_m := TexGen.mat_color(Color(0.16, 0.34, 0.13), 1.0)
-	for b in [[Vector3(0, 0.9, -103), Vector3(278, 1.8, 1.6)], [Vector3(-139, 0.9, 0), Vector3(1.6, 1.8, 208)], [Vector3(139, 0.9, 0), Vector3(1.6, 1.8, 208)]]:
+	# World extension: the north hedge now has a gate gap at x in
+	# [-7, 7] (mirroring the south gate) opening onto Northgate Avenue.
+	for b in [[Vector3(-73, 0.9, -103), Vector3(132, 1.8, 1.6)], [Vector3(73, 0.9, -103), Vector3(132, 1.8, 1.6)], [Vector3(-139, 0.9, 0), Vector3(1.6, 1.8, 208)], [Vector3(139, 0.9, 0), Vector3(1.6, 1.8, 208)]]:
 		_box(hedge_m, b[0], b[1], true)
 	# south fence with gate gap x in [-7, 7]
 	_box(hedge_m, Vector3(-73, 0.9, 103), Vector3(132, 1.8, 1.6), true)
@@ -711,6 +757,9 @@ static func build(parent: Node3D) -> Dictionary:
 	_build_gym_pool()
 	_build_city()
 
+	# --- World extension: the Northgate district (bazaar + lake park + colony)
+	_build_northgate(seats)
+
 	# --- trees, bushes, benches, lamps, boards, bins, signposts
 	var tree_spots := [Vector3(-30, 0, -20), Vector3(30, 0, -20), Vector3(-30, 0, 10), Vector3(30, 0, 10), Vector3(-12, 0, -19), Vector3(12, 0, 9), Vector3(-95, 0, -30), Vector3(95, 0, -30), Vector3(-100, 0, 40), Vector3(100, 0, 40), Vector3(-20, 0, 84), Vector3(22, 0, 84), Vector3(90, 0, -70), Vector3(-90, 0, -70), Vector3(0, 0, -34), Vector3(-104, 0, -6), Vector3(104, 0, -6), Vector3(30, 0, 34), Vector3(-32, 0, 34),
 		Vector3(-7.5, 0, 20), Vector3(7.5, 0, 52), Vector3(-7.5, 0, 66), Vector3(7.5, 0, 34), Vector3(-122, 0, -88), Vector3(122, 0, -88), Vector3(-126, 0, -50), Vector3(126, 0, -50), Vector3(12, 0, 70), Vector3(-38, 0, 72), Vector3(36, 0, 92), Vector3(-88, 0, 6), Vector3(88, 0, 8), Vector3(-14, 0, -34), Vector3(16, 0, -36), Vector3(-52, 0, 30), Vector3(84, 0, -30)]
@@ -768,12 +817,19 @@ static func build(parent: Node3D) -> Dictionary:
 		"garden": [Vector3(98, 0, 44), Vector3(106, 0, 52), Vector3(112, 0, 46), Vector3(100, 0, 58), Vector3(116, 0, 54), Vector3(94, 0, 36), Vector3(108, 0, 36), Vector3(118, 0, 64), Vector3(96, 0, 66), Vector3(98, 0, 78), Vector3(104, 0, 80), Vector3(92, 0, 82)],
 		# Phase 4: city spots stay OUTSIDE the shop buildings (street,
 		# shop fronts, park) so no path ever crosses a shop wall.
-		"city": [Vector3(0, 0, 136), Vector3(-8, 0, 136), Vector3(8, 0, 136), Vector3(-16, 0, 136), Vector3(16, 0, 136), Vector3(-14, 0, 134), Vector3(14, 0, 134), Vector3(0, 0, 160), Vector3(-6, 0, 160), Vector3(6, 0, 163), Vector3(-20, 0, 140), Vector3(20, 0, 140)]
+		"city": [Vector3(0, 0, 136), Vector3(-8, 0, 136), Vector3(8, 0, 136), Vector3(-16, 0, 136), Vector3(16, 0, 136), Vector3(-14, 0, 134), Vector3(14, 0, 134), Vector3(0, 0, 160), Vector3(-6, 0, 160), Vector3(6, 0, 163), Vector3(-20, 0, 140), Vector3(20, 0, 140)],
+		# World extension: Northgate spots stay on pavements, the park
+		# paths/lawns and the colony street — never inside a shopfront.
+		"bazaar": [Vector3(-40, 0, -144.6), Vector3(-20, 0, -144.6), Vector3(20, 0, -144.6), Vector3(40, 0, -144.6), Vector3(-52, 0, -159.6), Vector3(-28, 0, -159.6), Vector3(28, 0, -159.6), Vector3(52, 0, -159.6), Vector3(-8, 0, -148), Vector3(8, 0, -156), Vector3(-70, 0, -150), Vector3(70, 0, -150)],
+		"lakefront": [Vector3(-96, 0, -152), Vector3(-108, 0, -150), Vector3(-120, 0, -150), Vector3(-128, 0, -160), Vector3(-100, 0, -168), Vector3(-92, 0, -140), Vector3(-108, 0, -128), Vector3(-96, 0, -120), Vector3(-122, 0, -132), Vector3(-88, 0, -158)],
+		"colony": [Vector3(84, 0, -120), Vector3(92, 0, -120), Vector3(84, 0, -136), Vector3(92, 0, -136), Vector3(80.5, 0, -146), Vector3(95.5, 0, -146), Vector3(88, 0, -106), Vector3(84, 0, -112), Vector3(92, 0, -112), Vector3(88, 0, -144)]
 	}
 	for s in seats["quad"]:
 		spots["quad"].append(s["pos"])
 	for s in seats["garden"]:
 		spots["garden"].append(s["pos"])
+	for s in seats.get("lakefront", []):
+		spots["lakefront"].append(s["pos"])
 	# Phase 4: lowest-tier seats in Blocks B & C (platform top y 0.35,
 	# facing the north board, yaw = PI). _pick_spot matches these exactly
 	# and marks the NPC seated; NPC._process snaps y to the seat height.
@@ -800,7 +856,14 @@ static func build(parent: Node3D) -> Dictionary:
 		"ne1": Vector3(86, 0, -24), "lecc_front": Vector3(104, 0, -59), "lecc_in": Vector3(104, 0, -67),
 		"shops": Vector3(17, 0, 84), "gard_mid": Vector3(84, 0, 52), "garden_in": Vector3(100, 0, 50),
 		# Phase 4: city route — gate gap -> road -> bus stop -> MG Road street.
-		"city_road": Vector3(0, 0, 108), "city_bus": Vector3(3.5, 0, 120), "city_center": Vector3(0, 0, 136), "city_park": Vector3(0, 0, 160)
+		"city_road": Vector3(0, 0, 108), "city_bus": Vector3(3.5, 0, 120), "city_center": Vector3(0, 0, 136), "city_park": Vector3(0, 0, 160),
+		# World extension: north route — quad -> north avenue -> north
+		# gate -> Northgate Ave -> bazaar junction, then west to the
+		# lake park and east/south into the colony.
+		"n_ave": Vector3(2, 0, -58), "n_ave2": Vector3(2, 0, -86), "n_gate": Vector3(0, 0, -100), "n_road": Vector3(0, 0, -124), "n_junc": Vector3(0, 0, -150),
+		"baz_w1": Vector3(-38, 0, -152), "baz_w2": Vector3(-74, 0, -152), "baz_e1": Vector3(38, 0, -152), "baz_e2": Vector3(74, 0, -152),
+		"park_in": Vector3(-88, 0, -152), "park_lake": Vector3(-104, 0, -150),
+		"col_n": Vector3(88, 0, -150), "col_m": Vector3(88, 0, -128), "col_s": Vector3(88, 0, -110)
 	}
 	var edges := [
 		["gate", "ave_s1"], ["ave_s1", "ave_s2"], ["ave_s2", "quad_s"], ["quad_s", "quad_c"],
@@ -815,10 +878,14 @@ static func build(parent: Node3D) -> Dictionary:
 		["lib_path", "ne1"], ["ne1", "lecc_front"], ["lecc_front", "lecc_in"],
 		["gate", "shops"], ["ave_s1", "shops"],
 		["uni_path", "gard_mid"], ["gard_mid", "garden_in"],
-		["gate", "city_road"], ["city_road", "city_bus"], ["city_bus", "city_center"], ["city_center", "city_park"]
+		["gate", "city_road"], ["city_road", "city_bus"], ["city_bus", "city_center"], ["city_center", "city_park"],
+		["quad_n", "n_ave"], ["n_ave", "n_ave2"], ["n_ave2", "n_gate"], ["n_gate", "n_road"], ["n_road", "n_junc"],
+		["n_junc", "baz_w1"], ["baz_w1", "baz_w2"], ["baz_w2", "park_in"], ["park_in", "park_lake"],
+		["n_junc", "baz_e1"], ["baz_e1", "baz_e2"], ["baz_e2", "col_n"], ["col_n", "col_m"], ["col_m", "col_s"]
 	]
 	_finalize_canopies() # Phase 5: batch tree canopies into 3 MultiMesh draws
 	_merge_statics() # fix round: merge-by-material for all remaining statics
+	_build_snow_layer() # weather/seasons: merged winter overlay (hidden until winter)
 	var astar := AStar3D.new()
 	var ids: Dictionary = {}
 	var nid := 0
@@ -829,7 +896,8 @@ static func build(parent: Node3D) -> Dictionary:
 	for e in edges:
 		astar.connect_points(ids[e[0]], ids[e[1]], true)
 	var zone_entry := {"dorm": "dorm_in", "lecture": "lec_in", "library": "lib_in", "foodcourt": "food_in", "union": "uni_in", "quad": "quad_c", "sports": "sports_in", "gate": "gate",
-		"lectureb": "lecb_in", "lecturec": "lecc_in", "admin": "admin_in", "shops": "shops", "garden": "garden_in", "city": "city_center"}
+		"lectureb": "lecb_in", "lecturec": "lecc_in", "admin": "admin_in", "shops": "shops", "garden": "garden_in", "city": "city_center",
+		"bazaar": "n_junc", "lakefront": "park_in", "colony": "col_m"}
 
 	return {
 		"astar": astar, "ids": ids, "nodes": nodes, "zone_entry": zone_entry,
@@ -838,7 +906,8 @@ static func build(parent: Node3D) -> Dictionary:
 		"chai_pos": Vector3(15, 0, 24), "chai_front": Vector3(15, 0, 26.2),
 		"librarian_pos": Vector3(58, 0, -63.5), "canteen_staff_pos": Vector3(76.2, 0, 18),
 		"chai_staff_pos": Vector3(15, 0, 22.6), "shop_staff_pos": Vector3(21.0, 0, 82.5),
-		"city_shopkeeper_pos": Vector3(-14, 0, 133.5)
+		"city_shopkeeper_pos": Vector3(-14, 0, 133.5),
+		"bazaar_staff_pos": Vector3(11, 0, -149.6)
 	}
 
 static func _grid_spots(center: Vector3, cols: int, rows: int, dx: float, dz: float) -> Array:
@@ -1045,7 +1114,7 @@ static func _build_gym_pool() -> void:
 	water.height = 0.05
 	water.radial_segments = 24
 	# NOTE: cylinder axis is Y; scale flattens it into a round pool.
-	_mi(water, TexGen.mat_tex(TexGen.tex_water(), Color(0.8, 0.92, 1.0), Vector2(4, 4), 0.3), Vector3(12, 0.235, 41), Vector3(2.1, 1.0, 1.35))
+	_register_ice(_mi(water, TexGen.mat_tex(TexGen.tex_water(), Color(0.8, 0.92, 1.0), Vector2(4, 4), 0.3), Vector3(12, 0.235, 41), Vector3(2.1, 1.0, 1.35)))
 	for cx in [-1.5, 1.5]:
 		_box(bench_m, Vector3(12 + cx * 3.4, 0.35, 41), Vector3(1.8, 0.7, 0.6), true)
 	_sign("CAMPUS POOL", Vector3(12, 1.8, 36.5), 56, Color(1, 1, 1), 0.0)
@@ -1056,7 +1125,9 @@ static func _build_city() -> void:
 	# clothing store + café on the north side of the street, two
 	# apartment blocks, a park, and the Route 12 bus stop with a parked
 	# bus. All inside the "city" player-zone radius (center (0,140), r 24).
-	_ground_plane(TexGen.mat_tex(TexGen.tex_grass(), Color.WHITE, Vector2(24, 24)), Vector3(0, 0.015, 140), Vector2(64, 64))
+	var city_grass := TexGen.mat_tex(TexGen.tex_grass(), Color.WHITE, Vector2(24, 24))
+	_register_snow_tint(city_grass)
+	_ground_plane(city_grass, Vector3(0, 0.015, 140), Vector2(64, 64))
 	_ground_plane(TexGen.mat_tex(TexGen.tex_asphalt(), Color.WHITE, Vector2(4, 12)), Vector3(0, 0.02, 108), Vector2(10, 12))
 	_ground_plane(TexGen.mat_tex(TexGen.tex_asphalt(), Color.WHITE, Vector2(22, 5)), Vector3(0, 0.02, 136), Vector2(56, 10))
 	_ground_plane(TexGen.mat_tex(TexGen.tex_paving(), Color.WHITE, Vector2(22, 3)), Vector3(0, 0.021, 130), Vector2(56, 6))
@@ -1073,7 +1144,9 @@ static func _build_city() -> void:
 		_cyl(TexGen.mat_color(Color(0.92, 0.90, 0.86), 0.4), Vector3(tx, 0.72, 134.5), 0.55, 0.06, false)
 		_cyl(TexGen.mat_color(Color(0.30, 0.30, 0.33), 0.5), Vector3(tx, 0.36, 134.5), 0.06, 0.72, true)
 	# park: lawn strip, benches, trees, path (south end of the district)
-	_ground_plane(TexGen.mat_tex(TexGen.tex_grass(), Color(1.04, 1.0, 0.88), Vector2(14, 8)), Vector3(0, 0.016, 162), Vector2(44, 14))
+	var city_lawn := TexGen.mat_tex(TexGen.tex_grass(), Color(1.04, 1.0, 0.88), Vector2(14, 8))
+	_register_snow_tint(city_lawn)
+	_ground_plane(city_lawn, Vector3(0, 0.016, 162), Vector2(44, 14))
 	_ground_plane(TexGen.mat_tex(TexGen.tex_paving(), Color.WHITE, Vector2(6, 2)), Vector3(0, 0.026, 160), Vector2(3, 14))
 	_bench(Vector3(-6, 0, 160), 0.2)
 	_bench(Vector3(6, 0, 163), -0.3)
@@ -1097,6 +1170,263 @@ static func _build_city() -> void:
 	_box(TexGen.mat_tex(TexGen.tex_wood(), Color.WHITE, Vector2(2, 0.4)), Vector3(7, 0.55, 119.55), Vector3(4.6, 0.09, 0.4), false)
 	_build_bus(Vector3(0, 0, 119), PI / 2.0)
 	_sign("CITY BUS — Route 12 • MG Road Terminus", Vector3(7, 3.4, 118.5), 56, Color(1, 1, 1), 0.0, true, true)
+
+static func _build_stall(pos: Vector3, rot_y: float, color: Color, label: String) -> void:
+	# Market stall in the chai-stall idiom: counter, four posts, a
+	# coloured canopy and goods crates, with a boarded sign.
+	var g := Node3D.new()
+	g.position = pos
+	g.rotation.y = rot_y
+	_parent.add_child(g)
+	var saved := _parent
+	_parent = g
+	var wood_m := TexGen.mat_tex(TexGen.tex_wood(), Color.WHITE, Vector2(2, 1))
+	_box(wood_m, Vector3(0, 0.55, 0), Vector3(3.2, 1.1, 1.4), false)
+	for px in [-1.5, 1.5]:
+		for pz in [-0.9, 0.9]:
+			_box(wood_m, Vector3(px, 1.5, pz), Vector3(0.09, 3.0, 0.09), false)
+	_box(TexGen.mat_color(color, 0.9), Vector3(0, 3.08, 0), Vector3(3.8, 0.1, 2.6), false)
+	_box(TexGen.mat_color(Color(0.85, 0.55, 0.2), 0.8), Vector3(-0.8, 1.3, 0), Vector3(0.7, 0.4, 0.7), false)
+	_box(TexGen.mat_color(Color(0.6, 0.25, 0.2), 0.8), Vector3(0.5, 1.28, 0.2), Vector3(0.6, 0.36, 0.6), false)
+	_box(TexGen.mat_color(Color(0.3, 0.5, 0.3), 0.8), Vector3(1.1, 1.26, -0.2), Vector3(0.5, 0.32, 0.5), false)
+	if label != "":
+		_sign(label, Vector3(0, 2.5, 1.36), 50, Color(1.0, 0.92, 0.7))
+	_parent = saved
+	_add_box_shape(pos + Vector3(0, 0.8, 0), Vector3(3.2, 1.7, 1.5), rot_y)
+
+static func _build_northgate(seats: Dictionary) -> void:
+	# World extension build: the NORTHGATE district beyond the new
+	# north gate — a bazaar street (18 shopfronts + market stalls),
+	# North Lake Park (lakefront, gazebo, promenade) to the west and
+	# a residential colony street to the east. One connected district
+	# on real roads/paths, three new NPC zones (bazaar / lakefront /
+	# colony). All statics flow through the same merge pipeline and
+	# all buildings use two uniform footprints so their wall materials
+	# cache-share and merge into very few draws.
+	var asphalt_m := TexGen.mat_tex(TexGen.tex_asphalt(), Color.WHITE, Vector2(26, 26))
+	var pave_m := TexGen.mat_tex(TexGen.tex_paving(), Color.WHITE, Vector2(30, 30))
+	var paint_m := TexGen.mat_color(Color(0.94, 0.94, 0.92), 0.75)
+	var hedge_m := TexGen.mat_color(Color(0.16, 0.34, 0.13), 1.0)
+	# --- grounds + district boundary hedges
+	var ngrass := TexGen.mat_tex(TexGen.tex_grass(), Color.WHITE, Vector2(90, 26))
+	_register_snow_tint(ngrass)
+	_ground_plane(ngrass, Vector3(0, 0.008, -141), Vector2(280, 76))
+	_box(hedge_m, Vector3(0, 0.9, -174), Vector3(278, 1.8, 1.6), true)
+	_box(hedge_m, Vector3(-139, 0.9, -138.5), Vector3(1.6, 1.8, 71), true)
+	_box(hedge_m, Vector3(139, 0.9, -138.5), Vector3(1.6, 1.8, 71), true)
+	# north gate pillars + arch (twin of the south gate)
+	var stone_m := TexGen.mat_tex(TexGen.tex_concrete(), Color(0.9, 0.88, 0.84), Vector2(1.5, 5))
+	_box(stone_m, Vector3(-7.5, 2.6, -102), Vector3(1.6, 5.2, 1.6), true)
+	_box(stone_m, Vector3(7.5, 2.6, -102), Vector3(1.6, 5.2, 1.6), true)
+	_box(stone_m, Vector3(0, 5.6, -102), Vector3(17, 1.1, 1.8), true)
+	_sign("NORTHBRIDGE UNIVERSITY — NORTH GATE", Vector3(0, 5.6, -103.1), 96, Color(1.0, 0.9, 0.6), PI)
+	_sign("NORTHBRIDGE UNIVERSITY — NORTH GATE", Vector3(0, 5.6, -100.9), 96, Color(1.0, 0.9, 0.6), 0.0)
+	_roof_caps.append([Vector3(0, 0, -102), 17.0, 1.8, 6.20])
+	# --- Northgate Avenue (campus gate -> bazaar) + footpaths + dashes
+	_ground_plane(asphalt_m, Vector3(0, 0.02, -128), Vector2(10, 52))
+	_ground_plane(pave_m, Vector3(-7.5, 0.021, -128), Vector2(3, 52))
+	_ground_plane(pave_m, Vector3(7.5, 0.021, -128), Vector2(3, 52))
+	for z in range(-148, -106, 7):
+		_box(paint_m, Vector3(0, 0.035, float(z)), Vector3(0.18, 0.012, 3.0), false)
+	for sp in [[Vector3(-5.6, 0, -116), Vector3(1, 0, 0)], [Vector3(5.6, 0, -134), Vector3(-1, 0, 0)]]:
+		_street_pole(sp[0], sp[1])
+	_build_bus_shelter(Vector3(9.5, 0, -118))
+	_sign("NORTHGATE AVENUE", Vector3(-6.5, 2.6, -110), 54, Color(1, 1, 1), PI / 2.0, true, true)
+	# --- Bazaar street: asphalt + pavements + centre dashes
+	_ground_plane(asphalt_m, Vector3(0, 0.02, -152), Vector2(250, 11))
+	_ground_plane(pave_m, Vector3(0, 0.021, -144.8), Vector2(250, 3))
+	_ground_plane(pave_m, Vector3(0, 0.021, -159.2), Vector2(250, 3))
+	_ground_plane(pave_m, Vector3(0, 0.022, -152), Vector2(18, 18))
+	for x in range(-120, 122, 7):
+		if absf(float(x)) < 6.0:
+			continue
+		_box(paint_m, Vector3(float(x), 0.035, -152), Vector3(3.0, 0.012, 0.18), false)
+	_sign("NORTHGATE BAZAAR", Vector3(0, 3.4, -145.2), 84, Color(1.0, 0.92, 0.6), 0.0, true, true)
+	_notice_board(Vector3(6.5, 0, -146), PI, "NORTHGATE MARKET\n• Winter sale: woollens half price\n• Lake closed — ice on the water!")
+	# shop rows (uniform 11x7 footprint -> shared wall materials)
+	var north_shops := [
+		["NORTHGATE BOOKS", "brick", Color(1.05, 0.92, 0.78), Color(0.55, 0.30, 0.15)],
+		["SPICE HOUSE", "concrete", Color(1.02, 0.95, 0.85), Color(0.75, 0.35, 0.12)],
+		["MOBILE WORLD", "concrete", Color(0.94, 0.97, 1.02), Color(0.15, 0.40, 0.70)],
+		["SWEETS & SNACKS", "brick", Color(1.05, 0.95, 0.80), Color(0.80, 0.45, 0.15)],
+		["CYCLE WORKS", "concrete", Color(0.95, 0.95, 0.93), Color(0.30, 0.50, 0.30)],
+		["TEXTILE EMPORIUM", "brick", Color(1.0, 0.90, 0.95), Color(0.65, 0.20, 0.45)],
+		["CHAAT BHANDAR", "brick", Color(1.05, 0.93, 0.75), Color(0.85, 0.40, 0.10)],
+		["ELECTRONICS POINT", "concrete", Color(0.93, 0.96, 1.0), Color(0.20, 0.35, 0.60)],
+		["PHARMACY PLUS", "concrete", Color(0.95, 1.0, 0.96), Color(0.15, 0.55, 0.35)],
+		["SPORTS GOODS", "brick", Color(0.98, 0.94, 0.88), Color(0.70, 0.25, 0.20)]
+	]
+	var nx := [-66.0, -54.0, -42.0, -30.0, -18.0, 18.0, 30.0, 42.0, 54.0, 66.0]
+	for i in range(north_shops.size()):
+		var ns: Array = north_shops[i]
+		_building({"center": Vector3(nx[i], 0, -164.5), "w": 11, "d": 7, "h": 4.4, "door_side": "south", "name": ns[0], "wall_tex": TexGen.tex_brick() if ns[1] == "brick" else TexGen.tex_concrete(), "tint": ns[2], "accent": ns[3]})
+	var south_shops := [
+		["FLOWER MART", "concrete", Color(1.0, 0.95, 0.97), Color(0.70, 0.30, 0.50)],
+		["JUICE & SHAKES", "brick", Color(1.05, 0.94, 0.78), Color(0.85, 0.50, 0.12)],
+		["STATIONERY HUB", "concrete", Color(0.95, 0.97, 1.0), Color(0.20, 0.40, 0.65)],
+		["MUSIC HOUSE", "brick", Color(0.96, 0.92, 0.98), Color(0.45, 0.30, 0.60)],
+		["TOY KINGDOM", "concrete", Color(1.02, 0.96, 0.88), Color(0.80, 0.35, 0.25)],
+		["BAKERY FRESH", "brick", Color(1.05, 0.95, 0.82), Color(0.60, 0.35, 0.15)],
+		["OPTICS CARE", "concrete", Color(0.94, 0.98, 0.98), Color(0.15, 0.50, 0.55)],
+		["GENERAL STORE", "brick", Color(0.97, 0.95, 0.90), Color(0.40, 0.45, 0.25)]
+	]
+	var sx := [-60.0, -48.0, -36.0, -24.0, 24.0, 36.0, 48.0, 60.0]
+	for i in range(south_shops.size()):
+		var ss: Array = south_shops[i]
+		_building({"center": Vector3(sx[i], 0, -139.5), "w": 11, "d": 7, "h": 4.4, "door_side": "north", "name": ss[0], "wall_tex": TexGen.tex_brick() if ss[1] == "brick" else TexGen.tex_concrete(), "tint": ss[2], "accent": ss[3]})
+	# market stalls around the plaza and at both street ends
+	_build_stall(Vector3(-11, 0, -147.2), 0.0, Color(0.80, 0.30, 0.15), "FRUIT WALA — Apples • Oranges")
+	_build_stall(Vector3(11, 0, -147.2), 0.0, Color(0.15, 0.45, 0.65), "WOOLLENS — Shawls • Caps • Gloves")
+	_build_stall(Vector3(-11, 0, -156.8), PI, Color(0.20, 0.55, 0.30), "HOT CORN & PEANUTS")
+	_build_stall(Vector3(11, 0, -156.8), PI, Color(0.70, 0.25, 0.45), "TOYS & BALLOONS")
+	_build_stall(Vector3(-84, 0, -147.2), 0.0, Color(0.85, 0.55, 0.12), "FLOWER WALA")
+	_build_stall(Vector3(84, 0, -147.2), 0.0, Color(0.55, 0.30, 0.60), "BOOKS — Second-hand")
+	# bazaar street furniture: poles, bins, crates, parked vehicles
+	for px in [-100.0, -50.0, 50.0, 100.0]:
+		_street_pole(Vector3(px, 0, -146.2), Vector3(0, 0, -1))
+		_street_pole(Vector3(px + 25.0, 0, -157.8), Vector3(0, 0, 1))
+	for db in [Vector3(-16, 0, -145.5), Vector3(16, 0, -158.5), Vector3(-76, 0, -158.5), Vector3(76, 0, -145.5)]:
+		_dustbin(db)
+	var crate_m := TexGen.mat_tex(TexGen.tex_wood(), Color(0.9, 0.8, 0.65), Vector2(1, 1))
+	for cp in [Vector3(-73, 0, -144.6), Vector3(-72.2, 0, -144.6), Vector3(73, 0, -159.4), Vector3(90, 0, -144.6), Vector3(-92, 0, -159.4)]:
+		_box(crate_m, cp + Vector3(0, 0.33, 0), Vector3(0.66, 0.66, 0.66), true)
+	_build_car(Vector3(-96, 0, -149.5), PI / 2.0, Color(0.85, 0.80, 0.30))
+	_build_car(Vector3(98, 0, -154.5), -PI / 2.0, Color(0.30, 0.50, 0.70))
+	_build_rickshaw(Vector3(14.5, 0, -149))
+	for tx in [-104.0, -80.0, 80.0, 104.0, -122.0, 122.0]:
+		_tree(Vector3(tx, 0, -158.6), 0.95, int(absf(tx)) % 3)
+	# --- North Lake Park (west): lawn, lake, promenade, gazebo
+	var park_lawn := TexGen.mat_tex(TexGen.tex_grass(), Color(1.04, 1.0, 0.88), Vector2(20, 22))
+	_register_snow_tint(park_lawn)
+	_ground_plane(park_lawn, Vector3(-108, 0.016, -141), Vector2(60, 64))
+	_ground_plane(pave_m, Vector3(-108, 0.026, -152), Vector2(56, 3))
+	_ground_plane(pave_m, Vector3(-108, 0.026, -141), Vector2(3, 58))
+	# lake: stone rim + water (freezes to ice in winter)
+	var rim := CylinderMesh.new()
+	rim.top_radius = 11.6
+	rim.bottom_radius = 11.6
+	rim.height = 0.22
+	rim.radial_segments = 28
+	_mi(rim, TexGen.mat_tex(TexGen.tex_concrete(), Color(0.88, 0.86, 0.82), Vector2(6, 1)), Vector3(-112, 0.11, -160), Vector3(1.25, 1.0, 0.8))
+	var lake := CylinderMesh.new()
+	lake.top_radius = 11.0
+	lake.bottom_radius = 11.0
+	lake.height = 0.05
+	lake.radial_segments = 28
+	_register_ice(_mi(lake, TexGen.mat_tex(TexGen.tex_water(), Color(0.8, 0.92, 1.0), Vector2(4, 4), 0.3), Vector3(-112, 0.235, -160), Vector3(1.25, 1.0, 0.8)))
+	_add_box_shape(Vector3(-112, 0.4, -160), Vector3(24, 0.8, 16))
+	_sign("NORTH LAKE", Vector3(-98, 1.8, -154.5), 60, Color(1, 1, 1), 0.0)
+	_sign("NORTH LAKE PARK", Vector3(-79.5, 2.4, -152), 64, Color(1, 1, 1), PI / 2.0, true, true)
+	# gazebo on the park's east lawn
+	var gz_m := TexGen.mat_tex(TexGen.tex_wood(), Color(0.9, 0.8, 0.68), Vector2(2, 1))
+	for a in range(6):
+		var ang := float(a) * PI / 3.0
+		_cyl(gz_m, Vector3(-92 + sin(ang) * 2.6, 1.4, -128 + cos(ang) * 2.6), 0.09, 2.8, true)
+	var cone := CylinderMesh.new()
+	cone.top_radius = 0.3
+	cone.bottom_radius = 3.6
+	cone.height = 1.4
+	cone.radial_segments = 12
+	_mi(cone, TexGen.mat_color(Color(0.55, 0.25, 0.18), 0.85), Vector3(-92, 3.5, -128), Vector3.ONE)
+	_roof_caps.append([Vector3(-92, 0, -128), 6.4, 6.4, 3.55])
+	_box(gz_m, Vector3(-92, 0.25, -128), Vector3(5.6, 0.5, 5.6), true)
+	_sign("LAKE GAZEBO", Vector3(-92, 2.2, -124.8), 48, Color(1.0, 0.95, 0.8), 0.0)
+	# park benches (with NPC seat spots) + trees + flower beds
+	seats["lakefront"] = []
+	var pbench := [[Vector3(-98, 0, -152.8), 0.0], [Vector3(-126, 0, -152.8), 0.0], [Vector3(-108, 0, -138), -1.57], [Vector3(-120, 0, -170), 2.6], [Vector3(-88, 0, -118), 0.7]]
+	for b in pbench:
+		_bench(b[0], b[1])
+		var rot: float = b[1]
+		var side := Vector3(cos(rot), 0, -sin(rot))
+		for so in [-0.45, 0.45]:
+			seats["lakefront"].append({"pos": b[0] + side * so, "yaw": rot})
+	for tp in [Vector3(-130, 0, -118), Vector3(-86, 0, -112), Vector3(-132, 0, -140), Vector3(-84, 0, -166), Vector3(-96, 0, -170), Vector3(-128, 0, -122), Vector3(-90, 0, -144), Vector3(-124, 0, -146), Vector3(-100, 0, -116), Vector3(-118, 0, -130)]:
+		_tree(tp, 1.0, int(absf(tp.x)) % 3)
+	var flower_m := TexGen.mat_tex(TexGen.tex_flowers(), Color.WHITE, Vector2(3, 1))
+	var edging_m := TexGen.mat_tex(TexGen.tex_concrete(), Color(0.9, 0.88, 0.84), Vector2(3, 0.3))
+	for fb in [Vector3(-100, 0, -146), Vector3(-116, 0, -146), Vector3(-100, 0, -158), Vector3(-92, 0, -136)]:
+		_box(edging_m, fb + Vector3(0, 0.16, 0), Vector3(4.4, 0.32, 1.5), false)
+		_box(flower_m, fb + Vector3(0, 0.30, 0), Vector3(4.1, 0.10, 1.2), false)
+	# --- Northgate Colony (east): street, cul-de-sac, houses
+	_ground_plane(asphalt_m, Vector3(88, 0.02, -129), Vector2(10, 44))
+	_ground_plane(pave_m, Vector3(81.5, 0.021, -129), Vector2(3, 44))
+	_ground_plane(pave_m, Vector3(94.5, 0.021, -129), Vector2(3, 44))
+	var loop2 := CylinderMesh.new()
+	loop2.top_radius = 9.0
+	loop2.bottom_radius = 9.0
+	loop2.height = 0.06
+	loop2.radial_segments = 24
+	_mi(loop2, asphalt_m, Vector3(88, 0.03, -110), Vector3.ONE)
+	for z2 in range(-146, -118, 7):
+		_box(paint_m, Vector3(88, 0.035, float(z2)), Vector3(0.18, 0.012, 3.0), false)
+	_sign("NORTHGATE COLONY", Vector3(81.8, 2.6, -147), 56, Color(1, 1, 1), PI, true, true)
+	var houses := [
+		["SHARMA NIWAS", "brick", Color(1.04, 0.94, 0.84), Color(0.60, 0.32, 0.18)],
+		["GUPTA HOUSE", "concrete", Color(0.96, 0.95, 0.92), Color(0.35, 0.45, 0.60)],
+		["VERMA VILLA", "brick", Color(1.0, 0.92, 0.80), Color(0.50, 0.28, 0.40)],
+		["KHAN HOUSE", "concrete", Color(0.94, 0.97, 0.94), Color(0.25, 0.50, 0.35)],
+		["IYER HOME", "brick", Color(1.05, 0.96, 0.86), Color(0.70, 0.45, 0.15)],
+		["PATEL NIWAS", "concrete", Color(0.95, 0.93, 0.97), Color(0.45, 0.38, 0.55)]
+	]
+	var hz := [-116.0, -128.0, -140.0]
+	for i in range(3):
+		var hw: Array = houses[i]
+		_building({"center": Vector3(74, 0, hz[i]), "w": 10, "d": 8, "h": 5.5, "door_side": "east", "name": hw[0], "wall_tex": TexGen.tex_brick() if hw[1] == "brick" else TexGen.tex_concrete(), "tint": hw[2], "accent": hw[3]})
+		var he: Array = houses[i + 3]
+		_building({"center": Vector3(102, 0, hz[i]), "w": 10, "d": 8, "h": 5.5, "door_side": "west", "name": he[0], "wall_tex": TexGen.tex_brick() if he[1] == "brick" else TexGen.tex_concrete(), "tint": he[2], "accent": he[3]})
+	# colony street life: front-yard trees, parked car + scooters, poles
+	for tp2 in [Vector3(80, 0, -110), Vector3(96, 0, -122), Vector3(80, 0, -134), Vector3(96, 0, -146), Vector3(69, 0, -122), Vector3(107, 0, -134)]:
+		_tree(tp2, 0.9, int(absf(tp2.z)) % 3)
+	_build_car(Vector3(84.5, 0, -118), 0.05, Color(0.88, 0.87, 0.85))
+	_build_scooter(Vector3(92.5, 0, -131), 1.5, Color(0.70, 0.25, 0.20))
+	_build_scooter(Vector3(92.8, 0, -133.4), 1.42, Color(0.20, 0.35, 0.60))
+	for sp2 in [[Vector3(82.4, 0, -120), Vector3(1, 0, 0)], [Vector3(93.6, 0, -138), Vector3(-1, 0, 0)]]:
+		_street_pole(sp2[0], sp2[1])
+	_dustbin(Vector3(95.5, 0, -112))
+	# open lawns between the avenue and the park/colony: trees + benches
+	for tp3 in [Vector3(-40, 0, -120), Vector3(-58, 0, -136), Vector3(-26, 0, -140), Vector3(40, 0, -120), Vector3(58, 0, -136), Vector3(26, 0, -112), Vector3(-64, 0, -116), Vector3(66, 0, -118)]:
+		_tree(tp3, 1.0, int(absf(tp3.x)) % 3)
+	_bench(Vector3(-30, 0, -124), 0.9)
+	_bench(Vector3(30, 0, -124), -0.9)
+
+static func _build_snow_layer() -> void:
+	# Winter overlay, built AFTER the main merge: roof caps for every
+	# building (noted by _building into _roof_caps), flattened drifts
+	# scattered over the lawns, and snow strips on the hedge tops. It
+	# is merged by the same pipeline into a few draws, then hidden —
+	# Main toggles it with the season. The fix-round merge statistics
+	# are preserved across the second merge.
+	var keep_from := merged_statics_from
+	var keep_into := merged_statics_into
+	var saved_parent := _parent
+	snow_layer = Node3D.new()
+	snow_layer.name = "SnowLayer"
+	saved_parent.add_child(snow_layer)
+	_parent = snow_layer
+	var snow_m := TexGen.mat_color(Color(0.93, 0.95, 1.0), 0.95)
+	for rc in _roof_caps:
+		var c: Vector3 = rc[0]
+		_box(snow_m, Vector3(c.x, float(rc[3]), c.z), Vector3(float(rc[1]) + 1.0, 0.10, float(rc[2]) + 1.0), false)
+	# gate arch caps
+	_box(snow_m, Vector3(0, 6.20, 100), Vector3(17.0, 0.12, 1.9), false)
+	# hedge-top strips (campus perimeter + Northgate boundary)
+	for b in [[Vector3(-73, 1.87, -103), Vector3(132, 0.10, 1.7)], [Vector3(73, 1.87, -103), Vector3(132, 0.10, 1.7)], [Vector3(-73, 1.87, 103), Vector3(132, 0.10, 1.7)], [Vector3(73, 1.87, 103), Vector3(132, 0.10, 1.7)], [Vector3(-139, 1.87, 0), Vector3(1.7, 0.10, 208)], [Vector3(139, 1.87, 0), Vector3(1.7, 0.10, 208)], [Vector3(0, 1.87, -174), Vector3(278, 0.10, 1.7)], [Vector3(-139, 1.87, -138.5), Vector3(1.7, 0.10, 71)], [Vector3(139, 1.87, -138.5), Vector3(1.7, 0.10, 71)]]:
+		_box(snow_m, b[0], b[1], false)
+	# lawn drifts (deterministic scatter over lawn rectangles)
+	var drng := RandomNumberGenerator.new()
+	drng.seed = 20261203
+	var lawn_rects := [Rect2(-134, -98, 120, 64), Rect2(14, -98, 120, 64), Rect2(-134, -26, 88, 42), Rect2(48, -26, 86, 28), Rect2(76, 22, 58, 58), Rect2(-134, 22, 40, 68), Rect2(-20, 108, 40, 56), Rect2(-134, -168, 52, 54), Rect2(-72, -144, 58, 32), Rect2(14, -144, 58, 32), Rect2(-30, -32, 60, 22), Rect2(96, -146, 36, 36)]
+	for i in range(120):
+		var r: Rect2 = lawn_rects[i % lawn_rects.size()]
+		var p := Vector3(drng.randf_range(r.position.x, r.position.x + r.size.x), 0, drng.randf_range(r.position.y, r.position.y + r.size.y))
+		var rad := drng.randf_range(0.8, 2.3)
+		_sphere(snow_m, p + Vector3(0, 0.03, 0), Vector3(rad, rad * 0.30, rad * drng.randf_range(0.7, 1.0)))
+	_merge_statics()
+	_parent = saved_parent
+	merged_statics_from = keep_from
+	merged_statics_into = keep_into
+	snow_layer.visible = false
+	print("[WX] snow layer built: ", _roof_caps.size(), " roof caps + 120 drifts + hedge tops (merged)")
 
 static func _build_bus_shelter(pos: Vector3) -> void:
 	var g := Node3D.new()
@@ -1279,6 +1609,7 @@ static func _build_parking() -> void:
 
 static func _build_gardens(seats: Dictionary) -> void:
 	var lawn_m := TexGen.mat_tex(TexGen.tex_grass(), Color(1.04, 1.0, 0.88), Vector2(30, 26))
+	_register_snow_tint(lawn_m)
 	_ground_plane(lawn_m, Vector3(106, 0.016, 52), Vector2(62, 62))
 	# paths
 	var pave_m := TexGen.mat_tex(TexGen.tex_paving(), Color.WHITE, Vector2(10, 2))
@@ -1292,7 +1623,7 @@ static func _build_gardens(seats: Dictionary) -> void:
 	water.bottom_radius = 5.45
 	water.height = 0.05
 	water.radial_segments = 24
-	_mi(water, TexGen.mat_tex(TexGen.tex_water(), Color(0.8, 0.92, 1.0), Vector2(4, 4), 0.3), Vector3(118, 0.235, 32), Vector3.ONE)
+	_register_ice(_mi(water, TexGen.mat_tex(TexGen.tex_water(), Color(0.8, 0.92, 1.0), Vector2(4, 4), 0.3), Vector3(118, 0.235, 32), Vector3.ONE))
 	# FIX 2026-11-03: sign faced north (mirrored from the garden path); face it south to the path.
 	_sign("THE LAKE CORNER", Vector3(112, 1.6, 26.5), 56, Color(1, 1, 1), 0.0)
 	# flower beds + bushes + trees
@@ -1334,6 +1665,7 @@ static func _build_gardens(seats: Dictionary) -> void:
 
 static func _build_sports() -> void:
 	var pitch_m := TexGen.mat_tex(TexGen.tex_grass(), Color(0.85, 1.05, 0.85), Vector2(40, 24))
+	_register_snow_tint(pitch_m)
 	_ground_plane(pitch_m, Vector3(-52, 0.018, 62), Vector2(56, 34))
 	# running track ring around the pitch
 	var track_m := TexGen.mat_tex(TexGen.tex_track(), Color.WHITE, Vector2(24, 2))
