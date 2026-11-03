@@ -10,7 +10,8 @@ const ZONE_NAMES := {
 	"foodcourt": "Food Court", "quad": "Central Quad", "union": "Student Union",
 	"sports": "Sports Complex", "gate": "Main Gate",
 	"lectureb": "Lecture Block B", "lecturec": "Lecture Block C",
-	"admin": "Admin Block", "shops": "Campus Shops", "garden": "Gardens & Amphitheatre"
+	"admin": "Admin Block", "shops": "Campus Shops", "garden": "Gardens & Amphitheatre",
+	"city": "City District — MG Road"
 }
 
 var _world: Dictionary = {}
@@ -23,6 +24,7 @@ var _player: Player
 var _sun: DirectionalLight3D
 var _env: Environment
 var _sky_mat: ProceduralSkyMaterial
+var _rain_particles: GPUParticles3D = null # Phase 4 rain emitter (follows player)
 var _lamps: Array = []
 
 var _mains: Array = []
@@ -75,6 +77,38 @@ var _p3_fest_result: String = ""
 var _romance_partner: String = ""
 var _teacher_letters: Array = []
 var _city_trip_day: int = -1
+# ---------------- Phase 4 state ----------------
+var _p4_weather: String = "clear"
+var _p4_clubs_joined: Array = [] # club ids, max 2 (master prompt Section 8)
+var _p4_club_attended: Array = [] # "%d_%s" day_club keys
+var _p4_club_sessions: int = 0
+var _p4_sport_sessions: int = 0
+var _p4_sports_week_sessions: int = 0
+var _p4_sports_week_award: bool = false
+var _p4_exams_sat: Dictionary = {} # "%d" day -> marks
+var _p4_midsem_total: int = 0
+var _p4_midsem_count: int = 0
+var _p4_final_total: int = 0
+var _p4_final_count: int = 0
+var _p4_midsem_result: String = ""
+var _p4_final_results: String = ""
+var _p4_week: Dictionary = {"lectures": 0, "study": 0, "clubs": 0, "sports": 0, "jobs": 0, "earned": 0, "exams": 0}
+var _p4_sem: Dictionary = {"lectures": 0, "study": 0, "clubs": 0, "sports": 0, "jobs": 0, "earned": 0, "exams": 0}
+var _p4_week_summaries: Array = [] # strings, one per Monday
+var _p4_city_visits: int = 0
+var _p4_outfit: int = -1 # index into Phase4Data.outfits(), -1 = creation preset
+var _p4_hairstyle: int = -1 # hair_style index, -1 = creation preset
+var _p4_outfits_owned: Array = [] # outfit indices bought (re-wear free)
+var _p4_hairstyles_owned: Array = [] # hair_style indices bought (re-wear free)
+var _p4_decor_owned: Array = [] # décor ids owned
+var _p4_decor_placed: Array = [] # décor ids currently placed in the room
+var _p4_room_guest: String = ""
+var _p4_room_guest_day: int = -1
+var _p4_room_invite_done: bool = false
+var _p4_ext_progress: Dictionary = {} # name -> steps completed (continued arcs)
+var _p4_ext_done: Dictionary = {} # name -> bool
+var _p4_prompt_club: String = ""
+var _p4_decor_node: Node3D = null
 var _quest_marker: MeshInstance3D = null
 var _mission_timer: float = 0.0
 var _npc_msg_timer: float = 45.0
@@ -89,11 +123,12 @@ const ZONE_CENTERS := {
 	"union": Vector3(58, 0, 66), "sports": Vector3(-50, 0, 60),
 	"gate": Vector3(0, 0, 96), "admin": Vector3(-104, 0, -34),
 	"shops": Vector3(25, 0, 82), "garden": Vector3(105, 0, 55),
-	"quad": Vector3(0, 0, -5)
+	"quad": Vector3(0, 0, -5), "city": Vector3(0, 0, 140)
 }
 
 var _test_mode: bool = false
 var _capture_mode: bool = false
+var _semester_mode: bool = false
 var _test_start_ms: int = 0
 var _test_arrivals: Dictionary = {}
 var _rng := RandomNumberGenerator.new()
@@ -116,7 +151,12 @@ var _phone_tab: String = "Messages"
 var _phone_job_row: HBoxContainer
 var _phone_city_row: HBoxContainer
 var _phone_action_row: HBoxContainer
+var _shop_panel: PanelContainer
+var _shop_title: Label
+var _shop_list: VBoxContainer
 var _dlg_btns3: HBoxContainer
+var _dlg_btns4: HBoxContainer
+var _dlg_invite_btn: Button
 var _dlg_romance_btn: Button
 var _dlg_letter_btn: Button
 var _save_panel: PanelContainer
@@ -152,6 +192,9 @@ func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
 	_test_mode = args.has("--campus-test")
 	_capture_mode = args.has("--capture")
+	_semester_mode = args.has("--campus-semester")
+	if _semester_mode:
+		_test_mode = true # same guards as the one-day test (no autosave, no ambient chatter)
 	_build_environment()
 	_world = World.build(self)
 	_astar = _world["astar"]
@@ -164,6 +207,14 @@ func _ready() -> void:
 	_spawn_teachers()
 	_build_ui()
 	_init_phase2()
+	_p4_weather = Phase4Data.weather_for_day(day)
+	_p4_refresh_dorm_decor()
+	if _semester_mode:
+		# Standalone 12-week harness: no one-day sim first, straight to
+		# the accelerated semester (see _run_semester_harness).
+		var sem_ok := _run_semester_harness()
+		get_tree().quit(0 if sem_ok else 1)
+		return
 	if _test_mode:
 		Engine.time_scale = 6.0
 		speed_mult = 6.0
@@ -314,6 +365,11 @@ func _spawn_people() -> void:
 			"club": tpl["club"], "evening": tpl["evening"], "night": tpl["night"],
 			"greeting": CharData.background_greetings()[i % CharData.background_greetings().size()]
 		}
+		# Phase 4: three background students spend club period + evenings
+		# in the city district, so MG Road has foot traffic via the gate.
+		if i % 8 == 7:
+			d["club"] = "city"
+			d["evening"] = "city"
 		var zone: String = _segment_for(d, 7.5)
 		var npc := _npc_common(d, false, zone, i + 1)
 		_bgs.append(npc)
@@ -326,7 +382,9 @@ func _spawn_people() -> void:
 		{"name": "Ramesh (Chai Stall)", "pos": _world["chai_staff_pos"], "zone": "quad",
 			"line": "Chai, bhaiya/didi? Kadak masala, ₹15 only. Twenty years I've run this stall — half the professors did their PhD on my chai, I'm telling you."},
 		{"name": "Bhola (Shops)", "pos": _world["shop_staff_pos"], "zone": "shops",
-			"line": "Welcome to the campus shops lane! Xerox at ₹1 a page, juice fresh, books at student discount. Exam week, this whole lane stays open till midnight."}
+			"line": "Welcome to the campus shops lane! Xerox at ₹1 a page, juice fresh, books at student discount. Exam week, this whole lane stays open till midnight."},
+		{"name": "Meena (Style Studio)", "pos": _world["city_shopkeeper_pos"], "zone": "city", "female": true,
+			"line": "Welcome to Style Studio, MG Road! Fest kurtas, streetwear, formals — student prices, no bargaining needed. The city bus drops you right here."}
 	]
 	for sd in staff_defs:
 		var d := {
@@ -458,7 +516,14 @@ func _update_schedules() -> void:
 		var npc := n as NPC
 		if npc.is_staff or npc.talking:
 			continue
+		# Phase 4: a room guest stays on their visit until it completes
+		# or the day ends — the timetable must not yank them away mid-visit.
+		if str(npc.data["name"]) == _p4_room_guest:
+			continue
 		var zone := _segment_for(npc.data, hour)
+		# Phase 4 weather: rain moves outdoor crowds indoors.
+		if _p4_weather == "rain":
+			zone = str(Phase4Data.rain_redirect().get(zone, zone))
 		if zone != npc.target_zone:
 			npc.target_zone = zone
 			var idx := _all_npcs.find(npc)
@@ -470,6 +535,35 @@ func _update_schedules() -> void:
 		elif npc.path_idx >= npc.path.size() and npc.global_position.distance_to(npc.spot) > 1.2:
 			# arrived near entry but not at spot (or got nudged) — walk to spot
 			npc.set_path([npc.spot])
+	_p4_apply_tiers()
+
+func _p4_tier_for(dist: float) -> int:
+	if dist < 30.0:
+		return 0
+	if dist < 70.0:
+		return 1
+	return 2
+
+func _p4_apply_tiers(force_real: bool = false) -> void:
+	# Phase 4 (Section 15.2): near = full sim, mid = half movement rate,
+	# far = schedule-only stepping. Test/capture mode forces tier 0 so
+	# arrival evidence and staged poses are never disturbed, unless
+	# force_real is passed (the Phase 4 tier test does exactly that).
+	var pp := _player.global_position
+	for n in _all_npcs:
+		var npc := n as NPC
+		if npc.is_staff:
+			npc.sim_tier = 0
+			continue
+		var old := npc.sim_tier
+		if (_test_mode or _capture_mode) and not force_real:
+			npc.sim_tier = 0
+		else:
+			npc.sim_tier = _p4_tier_for(npc.global_position.distance_to(pp))
+		# Far -> near/mid transition: the straight-line stepping ignored
+		# the graph path, so re-path from the current position.
+		if old == 2 and npc.sim_tier < 2:
+			npc.set_path(_path_to(npc.global_position, npc.target_zone, npc.spot))
 
 func _process(delta: float) -> void:
 	if not paused and not _capture_mode:
@@ -482,6 +576,7 @@ func _process(delta: float) -> void:
 				return
 	_update_sun()
 	_update_schedules()
+	_p4_check_room_guest()
 	_update_interaction_prompt()
 	# Phase 2 ambient systems (normal play only)
 	if _mission_timer > 0.0:
@@ -528,7 +623,13 @@ func _finish_test() -> void:
 		print("[TEST_MAIN] ", (n as NPC).data["name"], " zone=", (n as NPC).target_zone)
 	var p2_ok := _run_phase2_tests()
 	var p3_ok := _run_phase3_tests()
-	get_tree().quit(0 if (p2_ok and p3_ok) else 1)
+	var p4_ok := _run_phase4_tests()
+	var sem_ok := false
+	if p2_ok and p3_ok and p4_ok:
+		sem_ok = _run_semester_harness()
+	else:
+		print("[TEST_P4_SEM] skipped: earlier phase tests failed (p2=", p2_ok, " p3=", p3_ok, " p4=", p4_ok, ")")
+	get_tree().quit(0 if (p2_ok and p3_ok and p4_ok and sem_ok) else 1)
 
 func _run_phase2_tests() -> bool:
 	# Phase 2 headless evidence: teachers present, dialogue sampling
@@ -616,6 +717,47 @@ func _update_sun() -> void:
 	var lamp_on := 1.3 if (hour < 6.6 or hour > 18.2) else 0.0
 	for l in _lamps:
 		(l as OmniLight3D).light_energy = lamp_on
+	# Phase 4 weather visuals: rain dulls the sun and thickens the haze;
+	# cloudy softens it. Day 1 is clear, so captures/tests are unaffected.
+	if _p4_weather == "rain":
+		_sun.light_energy *= 0.35
+		_env.ambient_light_energy *= 0.7
+		_env.fog_density = 0.012
+		_sky_mat.sky_top_color = _sky_mat.sky_top_color.lerp(Color(0.42, 0.44, 0.47), 0.85)
+		_sky_mat.sky_horizon_color = _sky_mat.sky_horizon_color.lerp(Color(0.55, 0.57, 0.60), 0.85)
+	elif _p4_weather == "cloudy":
+		_sun.light_energy *= 0.8
+		_env.fog_density = 0.0035
+		_sky_mat.sky_top_color = _sky_mat.sky_top_color.lerp(Color(0.45, 0.48, 0.52), 0.25)
+	else:
+		_env.fog_density = 0.0022
+	# Phase 4 rain particles: one shared emitter that follows the player
+	# and only emits while it rains (created lazily on first sun update).
+	if _rain_particles == null:
+		_rain_particles = GPUParticles3D.new()
+		_rain_particles.amount = 1500
+		_rain_particles.lifetime = 0.9
+		_rain_particles.emitting = false
+		_rain_particles.visibility_aabb = AABB(Vector3(-40, -20, -40), Vector3(80, 40, 80))
+		var rmat := ParticleProcessMaterial.new()
+		rmat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+		rmat.emission_box_extents = Vector3(35, 12, 35)
+		rmat.direction = Vector3(0, -1, 0)
+		rmat.spread = 5.0
+		rmat.initial_velocity_min = 16.0
+		rmat.initial_velocity_max = 22.0
+		rmat.gravity = Vector3(0, -12, 0)
+		_rain_particles.process_material = rmat
+		var rmesh := BoxMesh.new()
+		rmesh.size = Vector3(0.03, 0.6, 0.03)
+		var rmm := StandardMaterial3D.new()
+		rmm.albedo_color = Color(0.75, 0.82, 0.90, 0.55)
+		rmm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		rmesh.material = rmm
+		_rain_particles.draw_pass_1 = rmesh
+		add_child(_rain_particles)
+	_rain_particles.global_position = _player.global_position + Vector3(0, 14, 0)
+	_rain_particles.emitting = (_p4_weather == "rain")
 
 func _npc_small_talk() -> void:
 	# two NPCs in the same area chat; show a bubble on one of them
@@ -670,9 +812,47 @@ func _update_interaction_prompt() -> void:
 		_interact_kind = "npc"
 		_prompt_label.text = "[E] Talk to %s" % _interact_npc.data["name"]
 		return
-	# Phase 2 zone activities (only when no NPC is in talk range)
+	# Phase 4 interactions (checked before the Phase 2 zone activities;
+	# club sessions and exams take precedence in their windows).
 	var zone := _player_zone()
 	var hour := game_minutes / 60.0
+	var pp2 := _player.global_position
+	if pp2.distance_to(Vector3(7, 0, 120)) < 5.0:
+		_interact_kind = "city_bus_back"
+		_prompt_label.text = "[E] Bus back to campus — Route 12 (₹20)"
+		return
+	if zone == "gate" and pp2.distance_to(Vector3(-11, 0, 90)) < 5.0:
+		_interact_kind = "city_bus_out"
+		_prompt_label.text = "[E] Bus to the City District — Route 12 (₹20)"
+		return
+	if pp2.distance_to(Vector3(-14, 0, 134)) < 5.0 or pp2.distance_to(Vector3(14, 0, 134)) < 5.0 or pp2.distance_to(_world["shop_staff_pos"]) < 4.0:
+		_interact_kind = "shop"
+		_prompt_label.text = "[E] Browse shops — outfits, décor, café"
+		return
+	_p4_prompt_club = ""
+	for cid in Phase4Data.clubs().keys():
+		var c: Dictionary = Phase4Data.clubs()[cid]
+		var wd := (day - 1) % 7
+		if zone == str(c["venue"]) and wd == int(c["weekday"]) and hour >= float(c["hour_start"]) and hour < float(c["hour_end"]):
+			_p4_prompt_club = str(cid)
+			_interact_kind = "club"
+			_prompt_label.text = "[E] %s session — %s" % [str(c["title"]), "attend" if _p4_clubs_joined.has(cid) else "join + attend"]
+			return
+	for kind in ["gym", "swim", "basketball", "football", "running"]:
+		var s: Dictionary = Phase4Data.sports()[kind]
+		var anchor: Vector3 = s["anchor"]
+		# Gym/pool/court sit outside the sports zone radius, so their
+		# anchor alone gates them; pitch/track actions need the zone too.
+		if pp2.distance_to(anchor) < float(s["radius"]) and (kind == "gym" or kind == "swim" or kind == "basketball" or zone == "sports"):
+			_interact_kind = "sport_" + kind
+			_prompt_label.text = "[E] %s (Sport XP, health +)" % str(s["title"])
+			return
+	if (Phase4Data.midsem_days().has(day) or Phase4Data.final_days().has(day)) and (zone == "lecture" or zone == "lectureb" or zone == "lecturec") and hour >= 9.0 and hour < 16.0:
+		if not _p4_exams_sat.has("%d" % day):
+			_interact_kind = "exam"
+			_prompt_label.text = "[E] Sit exam: %s" % str(Phase2Data.major_info(player_major)["subjects"][0])
+			return
+	# Phase 2 zone activities (only when no NPC is in talk range)
 	var period := _lecture_period(hour)
 	if zone == "dorm":
 		_interact_kind = "sleep"
@@ -683,7 +863,7 @@ func _update_interaction_prompt() -> void:
 		_prompt_label.text = "[E] Attend lecture (%s)" % period
 		return
 	if zone == "library":
-		var cur := _current_assignment()
+		var cur: Variant = _current_assignment()
 		if cur != null and int(cur["progress"]) >= 100 and not bool(cur["submitted"]):
 			_interact_kind = "submit"
 			_prompt_label.text = "[E] Submit assignment: %s" % str(cur["title"])
@@ -715,6 +895,8 @@ func _input(event: InputEvent) -> void:
 				_phone_panel.visible = false
 			elif _save_panel != null and _save_panel.visible:
 				_save_panel.visible = false
+			elif _shop_panel != null and _shop_panel.visible:
+				_shop_panel.visible = false
 			elif _qa_panel != null and _qa_panel.visible:
 				_qa_panel.visible = false
 			elif _class_panel.visible:
@@ -739,6 +921,18 @@ func _input(event: InputEvent) -> void:
 				_do_sleep()
 			elif _interact_kind == "job_canteen":
 				_do_job("canteen")
+			elif _interact_kind == "city_bus_out":
+				_p4_bus_to_city()
+			elif _interact_kind == "city_bus_back":
+				_p4_bus_to_campus()
+			elif _interact_kind == "shop":
+				_p4_open_shop()
+			elif _interact_kind == "club":
+				_p4_club_session(_p4_prompt_club)
+			elif _interact_kind == "exam":
+				_p4_take_exam()
+			elif _interact_kind.begins_with("sport_"):
+				_p4_sport(_interact_kind.substr(6))
 			elif _interact_kind == "npc" and _interact_npc != null:
 				_open_dialogue(_interact_npc)
 		elif k == KEY_C and not _capture_mode:
@@ -824,6 +1018,8 @@ func _open_dialogue(npc: NPC) -> void:
 			_dlg_romance_btn.visible = npc.is_main
 		if _dlg_letter_btn != null:
 			_dlg_letter_btn.visible = npc.is_teacher
+	if _dlg_btns4 != null:
+		_dlg_btns4.visible = npc.is_main
 	_update_dlg_friend()
 	if npc.is_teacher:
 		_complete_quest_if("meet_teacher")
@@ -871,7 +1067,7 @@ func _dlg_choice(kind: String) -> void:
 		npc.office_help_day = day
 		npc.friendship = mini(100, npc.friendship + 3)
 		gpa = minf(10.0, gpa + 0.05)
-		var cur := _current_assignment()
+		var cur: Variant = _current_assignment()
 		if cur != null and not bool(cur["submitted"]):
 			cur["progress"] = mini(100, int(cur["progress"]) + 20)
 		_dlg_text.text = "Office hours, then. %s\n\n(GPA +0.05, assignment +20 progress, friendship +3.)" % Dialogue.pick_line(npc, "career", npc.target_zone, game_minutes / 60.0, day)
@@ -901,6 +1097,11 @@ func _dlg_choice(kind: String) -> void:
 		return
 	if kind == "p3_letter":
 		_dlg_text.text = _p3_try_letter(npc)
+		_update_dlg_friend()
+		_refresh_hud()
+		return
+	if kind == "p4_invite_room":
+		_dlg_text.text = _p4_invite_room(npc)
 		_update_dlg_friend()
 		_refresh_hud()
 		return
@@ -992,11 +1193,11 @@ func _nearby_main(dist: float) -> NPC:
 			return npc
 	return null
 
-func _current_assignment() -> Dictionary:
+func _current_assignment() -> Variant:
 	for a in _assignments:
 		if not bool(a["submitted"]):
 			return a
-	return {}
+	return null
 
 func _add_message(sender: String, text: String) -> void:
 	_messages.append({"day": day, "from": sender, "text": text})
@@ -1105,6 +1306,7 @@ func _qa_answer_pressed(idx: int) -> void:
 		_show_toast("Not quite — but attending and trying still counts. Review the topic in the library.")
 	_complete_quest_if("attend_lecture")
 	_p3_on_action("lecture")
+	_p4_bump("lectures")
 	_refresh_hud()
 
 func _do_study(group: bool) -> void:
@@ -1116,7 +1318,7 @@ func _do_study(group: bool) -> void:
 	if int(_skill_xp["Study"]) % 3 == 0 and int(skills["Study"]) < 10:
 		skills["Study"] = int(skills["Study"]) + 1
 		_show_toast("Study skill up! Now level %d." % int(skills["Study"]))
-	var cur := _current_assignment()
+	var cur: Variant = _current_assignment()
 	var gain := 25
 	var friend: NPC = null
 	if group:
@@ -1136,10 +1338,11 @@ func _do_study(group: bool) -> void:
 	stress = maxf(0.0, stress - 2.0)
 	_complete_quest_if("study_session")
 	_p3_on_action("study")
+	_p4_bump("study")
 	_refresh_hud()
 
 func _do_submit() -> void:
-	var cur := _current_assignment()
+	var cur: Variant = _current_assignment()
 	if cur == null or int(cur["progress"]) < 100 or bool(cur["submitted"]):
 		_show_toast("Nothing ready to submit yet — finish it in the library first.")
 		return
@@ -1180,6 +1383,8 @@ func _do_job(job_id: String) -> void:
 	_show_toast("%s done! +₹%d. Total earned: ₹%d." % [str(job["title"]), int(job["pay"]), _earned_total])
 	_complete_quest_if("job_shift")
 	_p3_on_action("job")
+	_p4_bump("jobs")
+	_p4_bump("earned", int(job["pay"]))
 	_refresh_hud()
 
 func _do_sleep() -> void:
@@ -1209,6 +1414,7 @@ func _advance_day() -> void:
 	day += 1
 	game_minutes = 360.0 # 06:00
 	_p3_on_day_start()
+	_p4_on_day_start()
 	energy = 95.0
 	health = minf(100.0, health + 5.0)
 	stress = maxf(0.0, stress - 10.0)
@@ -1273,7 +1479,7 @@ func _collect_state() -> Dictionary:
 		"assignments": asg, "attended": _attended_keys.duplicate(),
 		"jobs_done_day": _jobs_today.duplicate(), "jobs_done_total": _jobs_total.duplicate(),
 		"quest_index": _quest_index, "messages": msgs, "buzz": bz,
-		"p3": _p3_collect_state()
+		"p3": _p3_collect_state(), "p4": _p4_collect_state()
 	}
 
 func _apply_state(state: Dictionary) -> void:
@@ -1315,6 +1521,8 @@ func _apply_state(state: Dictionary) -> void:
 	_quest_index = int(state.get("quest_index", 0))
 	if state.has("p3") and state["p3"] is Dictionary:
 		_p3_apply_state(state["p3"])
+	if state.has("p4") and state["p4"] is Dictionary:
+		_p4_apply_state(state["p4"])
 	_messages = []
 	for m in state.get("messages", []):
 		_messages.append((m as Dictionary).duplicate())
@@ -1341,6 +1549,9 @@ func _apply_state(state: Dictionary) -> void:
 	if _appearance_idx >= 0 and _appearance_idx < presets.size():
 		var pr: Dictionary = presets[_appearance_idx]
 		_player.apply_appearance({"height": 1.74, "build": 1.0, "skin": pr["skin"], "hair_style": pr["hair_style"], "hair_color": Color(0.07, 0.05, 0.04), "shirt": pr["shirt"], "pants": Color(0.20, 0.22, 0.35), "female": pr["female"], "backpack": true, "pack_color": Color(0.25, 0.25, 0.28)})
+	# Phase 4: re-apply a saved custom outfit/hairstyle on top of the
+	# preset rebuild above, and rebuild the placed dorm décor.
+	_p4_after_load()
 	_refresh_hud()
 	_refresh_classmates()
 
@@ -1411,6 +1622,19 @@ func _phone_text_for(tab: String) -> String:
 			out3 += "\nAssignments:\n"
 			for a in _assignments:
 				out3 += "- %s (due Day %d): %d%% %s\n" % [str(a["title"]), int(a["due_day"]), int(a["progress"]), "SUBMITTED" if bool(a["submitted"]) else ""]
+			out3 += "\nWEATHER TODAY: %s%s\n" % [_p4_weather, " — outdoor crowds move indoors" if _p4_weather == "rain" else ""]
+			out3 += "\nCLUBS (join max 2; sessions 16:00–17:00, Literature Sun 11:00):\n"
+			for cid in Phase4Data.clubs().keys():
+				var c: Dictionary = Phase4Data.clubs()[cid]
+				out3 += "- %s (%s, %s): %s\n" % [str(c["title"]), ZONE_NAMES.get(str(c["venue"]), str(c["venue"])), ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][int(c["weekday"])], "JOINED" if _p4_clubs_joined.has(cid) else "not joined"]
+			out3 += "Club sessions attended: %d • Sport sessions: %d\n" % [_p4_club_sessions, _p4_sport_sessions]
+			out3 += "\nEXAMS: Mid-sem Days 52–54 (results Day 57) • Finals Days 78–82 (results Day 85) • Sports Meet Week Days 64–70\n"
+			if _p4_midsem_result != "":
+				out3 += "Mid-sem: %s\n" % _p4_midsem_result
+			if _p4_final_results != "":
+				out3 += "Finals: %s\n" % _p4_final_results
+			if not _p4_week_summaries.is_empty():
+				out3 += "\nLAST WEEK SUMMARY:\n%s\n" % str(_p4_week_summaries[_p4_week_summaries.size() - 1])
 			return out3
 		"Map":
 			var out4 := "CAMPUS MAP — you are in: %s\n\n" % _player_zone()
@@ -1441,7 +1665,7 @@ func _phone_text_for(tab: String) -> String:
 				out6 += "Day %d — %s:\n%s\n\n" % [int(p["day"]), str(p["author"]), str(p["text"])]
 			return out6
 		"City Gate":
-			var out7 := "CITY GATE — day trips by bus from the Main Gate (one trip per day).\nThe city district itself arrives in Phase 4; these trips are a teaser.\nYou are in: %s%s\n\n" % [_player_zone(), "" if _player_zone() == "gate" else " — go to the Main Gate to catch the bus."]
+			var out7 := "CITY GATE — day trips by bus from the Main Gate (one trip per day).\nThe MG Road city district is open: ride Route 12 from the Main Gate to shop, eat and explore.\nYou are in: %s%s\n\n" % [_player_zone(), "" if _player_zone() == "gate" else " — go to the Main Gate to catch the bus."]
 			for tid in Phase3Data.city_trips().keys():
 				var t: Dictionary = Phase3Data.city_trips()[tid]
 				out7 += "%s — ₹%d. %s\n\n" % [str(t["title"]), int(t["cost"]), str(t["desc"])]
@@ -1584,6 +1808,8 @@ func _p3_on_action(action: String, actor: String = "") -> int:
 			count += 1
 	if _p3_advance_storyline(action):
 		count += 1
+	# Phase 4: continued arcs advance on the same action vocabulary.
+	count += _p4_advance_extensions(action, actor)
 	return count
 
 func _p3_on_talk(npc: NPC) -> String:
@@ -1603,6 +1829,26 @@ func _p3_on_talk(npc: NPC) -> String:
 	var prog := _p3_progress(nm, npc.is_teacher)
 	if prog < steps.size() and str((steps[prog] as Dictionary)["action"]) == "talk":
 		notes.append(_p3_complete_arc_step(nm, npc.is_teacher))
+	# 2b) Phase 4 fix: arc steps of the form "talk_to:Name" were never
+	# completable (Shadow's step 2 was stuck at 1/2). Talking to the
+	# named person now completes any main's base or continued step.
+	for other in Phase3Data.arcs().keys():
+		var osteps: Array = _p3_steps_for(str(other), false)
+		var oprog := _p3_progress(str(other), false)
+		if oprog < osteps.size() and str((osteps[oprog] as Dictionary)["action"]) == "talk_to:" + nm:
+			notes.append(_p3_complete_arc_step(str(other), false))
+	# 2c) Phase 4 continued arcs: a "talk" step on the talked-to
+	# character's own continued arc (gated on base-arc completion).
+	if not npc.is_teacher and bool(_p3_arc_done.get(nm, false)):
+		var esteps: Array = _p4_ext_steps_for(nm)
+		var eprog := _p4_ext_prog(nm)
+		if eprog < esteps.size() and str((esteps[eprog] as Dictionary)["action"]) == "talk":
+			notes.append(_p4_complete_ext_step(nm))
+		for other2 in Phase4Data.arc_extensions().keys():
+			var e2: Array = _p4_ext_steps_for(str(other2))
+			var p2 := _p4_ext_prog(str(other2))
+			if bool(_p3_arc_done.get(str(other2), false)) and p2 < e2.size() and str((e2[p2] as Dictionary)["action"]) == "talk_to:" + nm:
+				notes.append(_p4_complete_ext_step(str(other2)))
 	# 3) Favours delivered by talking to the target person.
 	for fav in _p3_favours.duplicate():
 		var f: Dictionary = fav
@@ -1623,7 +1869,17 @@ func _p3_story_text(npc: NPC) -> String:
 	var steps: Array = arc["steps"]
 	var prog := _p3_progress(nm, npc.is_teacher)
 	if prog >= steps.size():
-		return "📖 '%s' — COMPLETE. %s" % [str(arc["title"]), str(arc["premise"])]
+		var done_txt := "📖 '%s' — COMPLETE. %s" % [str(arc["title"]), str(arc["premise"])]
+		# Phase 4: continued chapters follow the base arc.
+		if not npc.is_teacher and Phase4Data.arc_extensions().has(nm):
+			var ext: Dictionary = Phase4Data.arc_extensions()[nm]
+			var es: Array = ext["steps"]
+			var ep := _p4_ext_prog(nm)
+			if ep >= es.size():
+				done_txt += "\n📖 Continued '%s' — COMPLETE." % str(ext["title"])
+			else:
+				done_txt += "\n📖 Continued '%s' — Step %d of %d: %s — %s" % [str(ext["title"]), ep + 1, es.size(), str((es[ep] as Dictionary)["title"]), str((es[ep] as Dictionary)["desc"])]
+		return done_txt
 	var st: Dictionary = steps[prog]
 	return "📖 '%s' — %s\nStep %d of %d: %s — %s" % [str(arc["title"]), str(arc["premise"]), prog + 1, steps.size(), str(st["title"]), str(st["desc"])]
 
@@ -1777,10 +2033,10 @@ func _do_city_trip(tid: String) -> void:
 		social = minf(100.0, social + 3.0)
 	elif tid == "bookstore":
 		gpa = minf(10.0, gpa + 0.02)
-		var cur := _current_assignment()
+		var cur: Variant = _current_assignment()
 		if cur != null and not bool(cur["submitted"]):
 			cur["progress"] = mini(100, int(cur["progress"]) + 10)
-	_p3_post("City Bus", "Day trip: %s. %s (The full city district arrives in Phase 4.)" % [str(t["title"]), str(t["desc"])])
+	_p3_post("City Bus", "Day trip: %s. %s (The MG Road city district is open — ride Route 12 from the Main Gate.)" % [str(t["title"]), str(t["desc"])])
 	_show_toast("🚌 Day trip: %s (−₹%d). The bus drops you back at the gate by evening." % [str(t["title"]), int(t["cost"])])
 	_refresh_hud()
 
@@ -1833,7 +2089,7 @@ func _p3_on_day_start() -> void:
 		var tpl: Array = Phase3Data.social_templates()
 		var poster: NPC = _mains[day % _mains.size()]
 		_p3_post(str(poster.data["name"]), str(tpl[day % tpl.size()]).replace("{name}", str(poster.data["name"])))
-	if _p3_story_idx == 3 and day >= 70:
+	if _p3_story_idx == 3 and day >= 85:
 		_p3_story_idx = 4
 		social = minf(100.0, social + 10.0)
 		_add_message("Northbridge Admin", "Results Day: grades are published at the Admin Block. Whatever they say, you lived this semester.")
@@ -1858,6 +2114,15 @@ func _p3_stories_text() -> String:
 		var prog2 := int(_p3_teacher_progress.get(nm, 0))
 		var steps2: Array = arc2["steps"]
 		out += "- %s, '%s': %d/%d %s\n" % [str(nm), str(arc2["title"]), prog2, steps2.size(), "COMPLETE" if prog2 >= steps2.size() else str(steps2[prog2]["title"])]
+	out += "\nPHASE 4 CONTINUED ARCS (finish the base arc first):\n"
+	for nm in Phase4Data.arc_extensions().keys():
+		var ext: Dictionary = Phase4Data.arc_extensions()[nm]
+		var es: Array = ext["steps"]
+		var ep := _p4_ext_prog(str(nm))
+		if not bool(_p3_arc_done.get(str(nm), false)):
+			out += "- %s, '%s': base arc incomplete\n" % [str(nm), str(ext["title"])]
+		else:
+			out += "- %s, '%s': %d/%d %s\n" % [str(nm), str(ext["title"]), ep, es.size(), "COMPLETE" if ep >= es.size() else str((es[ep] as Dictionary)["title"])]
 	out += "\nFAVOURS DONE: %d • OPEN FAVOURS:\n" % _p3_favours_done
 	if _p3_favours.is_empty():
 		out += "- none. Talk to a main and press Favour.\n"
@@ -2082,6 +2347,1068 @@ func _run_phase3_tests() -> bool:
 	print("[TEST_P3] RESULT: ", "PASS" if ok else "FAIL")
 	return ok
 
+# ---------------- Phase 4 systems ----------------
+# Full Semester: clubs, sports, exams, weather-driven crowds, the city
+# district, customisation, dorm life, week/semester summaries, continued
+# arcs, and the 12-week playthrough harness. No Phase 5 work lives here.
+
+const _P4_ROOM_SPOT := Vector3(-58, 0, 14)
+
+func _p4_bump(key: String, n: int = 1) -> void:
+	_p4_week[key] = int(_p4_week.get(key, 0)) + n
+	_p4_sem[key] = int(_p4_sem.get(key, 0)) + n
+
+func _p4_add_skill_xp(skill: String, n: int) -> void:
+	if n <= 0:
+		return
+	_skill_xp[skill] = int(_skill_xp.get(skill, 0)) + n
+	if int(_skill_xp[skill]) % 3 == 0 and int(skills[skill]) < 10:
+		skills[skill] = int(skills[skill]) + 1
+		_show_toast("%s skill up! Now level %d." % [skill, int(skills[skill])])
+
+# --- continued arcs (steps 3-6; gated on the Phase 3 base arc) ---
+
+func _p4_ext_steps_for(nm: String) -> Array:
+	var table: Dictionary = Phase4Data.arc_extensions()
+	if table.has(nm):
+		return (table[nm] as Dictionary)["steps"]
+	return []
+
+func _p4_ext_prog(nm: String) -> int:
+	return int(_p4_ext_progress.get(nm, 0))
+
+func _p4_complete_ext_step(nm: String) -> String:
+	var steps: Array = _p4_ext_steps_for(nm)
+	var prog := _p4_ext_prog(nm)
+	if prog >= steps.size():
+		return ""
+	var step: Dictionary = steps[prog]
+	var reward := _p3_apply_reward(step, nm)
+	prog += 1
+	_p4_ext_progress[nm] = prog
+	if prog >= steps.size():
+		_p4_ext_done[nm] = true
+		social = minf(100.0, social + 5.0)
+		_p3_post(nm, "Finished the continued story '%s' with you." % str(Phase4Data.arc_extensions()[nm]["title"]))
+		_show_mission("Story complete: %s" % str(step["title"]), "%s's continued arc is finished! %s" % [nm, reward])
+		return "📖 Story complete: %s — %s's continued arc is finished! (%s, social +5.)" % [str(step["title"]), nm, reward]
+	_p3_post(nm, "Story update: %s — %s." % [str(step["title"]), str(step["desc"])])
+	_show_toast("📖 Story progress: %s (%s)" % [str(step["title"]), reward])
+	return "📖 Story progress: %s (%s)" % [str(step["title"]), reward]
+
+func _p4_advance_extensions(action: String, actor: String = "") -> int:
+	var count := 0
+	for nm in Phase4Data.arc_extensions().keys():
+		var sname := str(nm)
+		if not bool(_p3_arc_done.get(sname, false)):
+			continue
+		var steps: Array = _p4_ext_steps_for(sname)
+		var prog := _p4_ext_prog(sname)
+		if prog < steps.size():
+			var st: Dictionary = steps[prog]
+			if str(st["action"]) == action and (str(st.get("target", "")) == "" or str(st.get("target", "")) == actor or action.begins_with("visit:")):
+				_p4_complete_ext_step(sname)
+				count += 1
+	return count
+
+# --- day-start: weather, exams, sports week, summaries ---
+
+func _p4_on_day_start() -> void:
+	_p4_weather = Phase4Data.weather_for_day(day)
+	if _p4_weather == "rain":
+		stress = minf(100.0, stress + 2.0)
+		_add_message("Northbridge Admin", "Rain on campus today — outdoor sessions are dulled and crowds move indoors (quad/gardens/sports head inside).")
+	if day == 49:
+		_add_message("Northbridge Admin", "Heads up: mid-semester exams begin Day 52 (Wed–Fri, Week 8) in your lecture block. Revise, sleep, breathe.")
+	if day == 75:
+		_add_message("Northbridge Admin", "Heads up: final exams begin Day 78 (Mon–Fri, Week 12) in your lecture block. Everything counts now.")
+	if Phase4Data.midsem_days().has(day) or Phase4Data.final_days().has(day):
+		_add_message("Northbridge Admin", "Exam today: %s — sit it in your lecture block (09:00–16:00)." % str(Phase2Data.major_info(player_major)["subjects"][0]))
+	if day == Phase4Data.midsem_results_day():
+		var avg := 0
+		if _p4_midsem_count > 0:
+			avg = _p4_midsem_total / _p4_midsem_count
+		_p4_midsem_result = "Mid-semester average %d%% over %d paper(s)%s." % [avg, _p4_midsem_count, "" if _p4_midsem_count > 0 else " — you sat no mid-sem papers"]
+		gpa = clampf(gpa * 0.85 + (float(avg) / 10.0) * 0.15, 0.0, 10.0)
+		_add_message("Northbridge Admin", "Mid-semester results: %s (GPA now %.2f.)" % [_p4_midsem_result, gpa])
+		_p3_post("Northbridge Admin", "Mid-semester results are out. %s" % _p4_midsem_result)
+	if day == Phase4Data.final_results_day():
+		var avg2 := 0
+		if _p4_final_count > 0:
+			avg2 = _p4_final_total / _p4_final_count
+		_p4_final_results = "Final average %d%% over %d paper(s)%s." % [avg2, _p4_final_count, "" if _p4_final_count > 0 else " — you sat no final papers"]
+		gpa = clampf(gpa * 0.80 + (float(avg2) / 10.0) * 0.20, 0.0, 10.0)
+		var verdict := "A semester scraped through — but finished." if gpa < 7.0 else ("A solid semester, well lived." if gpa < 8.5 else "A first-class semester. Northbridge applauds you.")
+		var summary := "SEMESTER COMPLETE — lectures %d, study %d, clubs %d, sports %d, shifts %d, earned ₹%d, city trips %d. Final GPA %.2f. %s %s" % [int(_p4_sem["lectures"]), int(_p4_sem["study"]), int(_p4_sem["clubs"]), int(_p4_sem["sports"]), int(_p4_sem["jobs"]), int(_p4_sem["earned"]), _p4_city_visits, gpa, _p4_final_results, verdict]
+		_add_message("Northbridge Admin", "Final results: %s %s" % [_p4_final_results, verdict])
+		_add_message("Northbridge Admin", summary)
+		_p3_post("Northbridge Admin", summary)
+	if day == 64:
+		_add_message("Northbridge Admin", "Sports Meet Week begins (Days 64–70)! Sports sessions count double XP — 3+ sessions earns the meet prize.")
+	if day == 71:
+		if _p4_sports_week_sessions >= 3 and not _p4_sports_week_award:
+			_p4_sports_week_award = true
+			social = minf(100.0, social + 10.0)
+			money += 200
+			_add_message("Northbridge Admin", "Sports Meet prize! You attended %d sessions during Sports Meet Week — social +10, ₹200 prize." % _p4_sports_week_sessions)
+			_p3_post("Campus Events", "Sports Meet prize: %s showed up all week. %s" % [player_name, "Meet champion!" if _p4_sports_week_sessions >= 5 else "Well played."])
+		elif not _p4_sports_week_award:
+			_add_message("Northbridge Admin", "Sports Meet Week ended — you attended %d sessions (3+ earns the prize)." % _p4_sports_week_sessions)
+	var weekday := (day - 1) % 7
+	if weekday == 0 and day > 1:
+		var week_no := (day - 1) / 7
+		var s := "Week %d summary: %d lectures, %d study sessions, %d club sessions, %d sports sessions, %d shifts, ₹%d earned, %d exams. GPA %.2f." % [week_no, int(_p4_week["lectures"]), int(_p4_week["study"]), int(_p4_week["clubs"]), int(_p4_week["sports"]), int(_p4_week["jobs"]), int(_p4_week["earned"]), int(_p4_week["exams"]), gpa]
+		_p4_week_summaries.append(s)
+		_add_message("Northbridge Admin", s)
+		_p4_week = {"lectures": 0, "study": 0, "clubs": 0, "sports": 0, "jobs": 0, "earned": 0, "exams": 0}
+	# A room visit that outlived its day quietly lapses.
+	if _p4_room_guest != "" and _p4_room_guest_day < day:
+		_p4_room_guest = ""
+		_p4_room_guest_day = -1
+
+# --- clubs ---
+
+func _p4_club_session(cid: String) -> void:
+	var clubs: Dictionary = Phase4Data.clubs()
+	if cid == "" or not clubs.has(cid):
+		return
+	var c: Dictionary = clubs[cid]
+	var hour := game_minutes / 60.0
+	if _player_zone() != str(c["venue"]) or hour < float(c["hour_start"]) or hour >= float(c["hour_end"]):
+		_show_toast("The %s session is at the %s, %.0f:00–%.0f:00." % [str(c["title"]), str(c["venue"]), float(c["hour_start"]), float(c["hour_end"])])
+		return
+	if not _p4_clubs_joined.has(cid):
+		if _p4_clubs_joined.size() >= 2:
+			_show_toast("You are already in two clubs — the semester rule is one or two. (No drop-out desk yet; pick your two well.)")
+			return
+		_p4_clubs_joined.append(cid)
+		_show_toast("Joined the %s! Weekly sessions: %s." % [str(c["title"]), str(c["desc"])])
+	var key := "%d_%s" % [day, cid]
+	if _p4_club_attended.has(key):
+		_show_toast("You already attended this session today.")
+		return
+	if energy < 6.0:
+		_show_toast("Too tired for a club session. Eat or rest first.")
+		return
+	_p4_club_attended.append(key)
+	_p4_club_sessions += 1
+	_p4_bump("clubs")
+	energy = maxf(0.0, energy - 6.0)
+	var outdoor := str(c["venue"]) in ["quad", "sports", "garden"]
+	if _p4_weather == "rain" and outdoor:
+		_show_toast("Rain dulled the %s session — good turnout anyway, but no skill XP in the wet." % str(c["title"]))
+	else:
+		_p4_add_skill_xp(str(c["skill"]), 1)
+	social = minf(100.0, social + 2.0)
+	if bool(c["practice"]):
+		_fest_practice += 1
+	_p3_on_action("club:" + cid)
+	_show_toast("Session done: %s. Social +2.%s" % [str(c["title"]), " Fest practice +1." if bool(c["practice"]) else ""])
+	_refresh_hud()
+
+# --- sports / gym / swim ---
+
+func _p4_sport(kind: String) -> void:
+	var sports: Dictionary = Phase4Data.sports()
+	if not sports.has(kind):
+		return
+	var s: Dictionary = sports[kind]
+	var anchor: Vector3 = s["anchor"]
+	if _player.global_position.distance_to(anchor) > float(s["radius"]):
+		_show_toast("Go to the %s first." % str(s["title"]))
+		return
+	if energy < 10.0:
+		_show_toast("Too tired for sport. Eat or rest first.")
+		return
+	energy = maxf(0.0, energy - 10.0)
+	health = minf(100.0, health + 3.0)
+	stress = maxf(0.0, stress - 3.0)
+	var outdoor := kind != "gym"
+	var xp := 0
+	if not (_p4_weather == "rain" and outdoor):
+		xp = 1
+	if Phase4Data.sports_week_days().has(day):
+		xp += 1
+		_p4_sports_week_sessions += 1
+	_p4_add_skill_xp("Sport", xp)
+	_p4_sport_sessions += 1
+	_p4_bump("sports")
+	social = minf(100.0, social + 1.0)
+	_p3_on_action("sport:" + kind)
+	_show_toast("%s done! Health +3, stress −3, Sport XP +%d.%s" % [str(s["title"]), xp, " Sports Meet Week: double XP!" if Phase4Data.sports_week_days().has(day) else ""])
+	_refresh_hud()
+
+# --- exams ---
+
+func _p4_take_exam() -> void:
+	var is_mid := Phase4Data.midsem_days().has(day)
+	var is_fin := Phase4Data.final_days().has(day)
+	if not is_mid and not is_fin:
+		_show_toast("No exam today. Mid-sem: Days 52–54. Finals: Days 78–82.")
+		return
+	var zone := _player_zone()
+	if zone != "lecture" and zone != "lectureb" and zone != "lecturec":
+		_show_toast("Exams are sat in the lecture blocks — go to your block.")
+		return
+	var key := "%d" % day
+	if _p4_exams_sat.has(key):
+		_show_toast("You already sat today's paper.")
+		return
+	if energy < 5.0:
+		_show_toast("Too tired to sit an exam. Eat or rest first.")
+		return
+	energy = maxf(0.0, energy - 5.0)
+	var submitted := 0
+	for a in _assignments:
+		if bool(a["submitted"]):
+			submitted += 1
+	var prep := submitted * 8 + int(skills["Study"]) * 3 + clampi(int((gpa - 5.0) * 4.0), -10, 20)
+	var marks := clampi(45 + prep, 35, 98)
+	_p4_exams_sat[key] = marks
+	_p4_bump("exams")
+	if is_mid:
+		_p4_midsem_total += marks
+		_p4_midsem_count += 1
+	else:
+		_p4_final_total += marks
+		_p4_final_count += 1
+	_p3_on_action("exam_midsem" if is_mid else "exam_final")
+	_show_toast("Paper submitted: %s — %s exam, Day %d. Marks are computed from attendance, study and submitted work." % [str(Phase2Data.major_info(player_major)["subjects"][0]), "Mid-semester" if is_mid else "Final", day])
+	_refresh_hud()
+
+# --- city bus route ---
+
+func _p4_bus_to_city() -> void:
+	if _player_zone() != "gate":
+		_show_toast("City buses leave from the Main Gate bus loop.")
+		return
+	var fare := Phase4Data.city_bus_fare()
+	if money < fare:
+		_show_toast("Bus fare is ₹%d. You have ₹%d." % [fare, money])
+		return
+	money -= fare
+	_p4_city_visits += 1
+	_player.global_position = Vector3(0, 0.1, 120)
+	_show_toast("🚌 Route 12 to MG Road (−₹%d). Clothing store, café street, apartments and the park — welcome to the city district." % fare)
+	_p3_check_zone("city", true)
+	_refresh_hud()
+
+func _p4_bus_to_campus() -> void:
+	if _player_zone() != "city":
+		_show_toast("The return bus leaves from the MG Road terminus.")
+		return
+	var fare := Phase4Data.city_bus_fare()
+	if money < fare:
+		_show_toast("Bus fare is ₹%d. You have ₹%d." % [fare, money])
+		return
+	money -= fare
+	_player.global_position = Vector3(0, 0.1, 88)
+	_show_toast("🚌 Route 12 back to campus (−₹%d). The bus drops you at the Main Gate." % fare)
+	_refresh_hud()
+
+# --- shops: outfits, hairstyles, décor, café ---
+
+func _p4_player_cfg() -> Dictionary:
+	var presets: Array = Phase2Data.appearance_presets()
+	var idx := clampi(_appearance_idx, 0, presets.size() - 1)
+	var pr: Dictionary = presets[idx]
+	var shirt: Color = pr["shirt"]
+	var pants := Color(0.20, 0.22, 0.35)
+	var hair_style: int = pr["hair_style"]
+	if _p4_outfit >= 0 and _p4_outfit < Phase4Data.outfits().size():
+		var o: Dictionary = Phase4Data.outfits()[_p4_outfit]
+		shirt = o["shirt"]
+		pants = o["pants"]
+	if _p4_hairstyle >= 0:
+		hair_style = _p4_hairstyle
+	return {"height": 1.74, "build": 1.0, "skin": pr["skin"], "hair_style": hair_style, "hair_color": Color(0.07, 0.05, 0.04), "shirt": shirt, "pants": pants, "female": pr["female"], "backpack": true, "pack_color": Color(0.25, 0.25, 0.28)}
+
+func _p4_apply_custom_appearance() -> void:
+	_player.apply_appearance(_p4_player_cfg())
+
+func _p4_buy_outfit(idx: int) -> void:
+	var outfits: Array = Phase4Data.outfits()
+	if idx < 0 or idx >= outfits.size():
+		return
+	var o: Dictionary = outfits[idx]
+	if not _p4_outfits_owned.has(idx):
+		if money < int(o["price"]):
+			_show_toast("Not enough money for %s (₹%d). You have ₹%d." % [str(o["label"]), int(o["price"]), money])
+			return
+		money -= int(o["price"])
+		_p4_outfits_owned.append(idx)
+	_p4_outfit = idx
+	_p4_apply_custom_appearance()
+	_p3_on_action("customise")
+	_show_toast("Now wearing: %s. It stays in your wardrobe — re-wear it free any time." % str(o["label"]))
+	_p4_open_shop()
+	_refresh_hud()
+
+func _p4_buy_hairstyle(idx: int) -> void:
+	var styles: Array = Phase4Data.hairstyles()
+	if idx < 0 or idx >= styles.size():
+		return
+	var st: Dictionary = styles[idx]
+	if not _p4_hairstyles_owned.has(int(st["style"])):
+		if money < int(st["price"]):
+			_show_toast("Not enough money for %s (₹%d). You have ₹%d." % [str(st["label"]), int(st["price"]), money])
+			return
+		money -= int(st["price"])
+		_p4_hairstyles_owned.append(int(st["style"]))
+	_p4_hairstyle = int(st["style"])
+	_p4_apply_custom_appearance()
+	_p3_on_action("customise")
+	_show_toast("New hairstyle: %s. Re-wear it free any time." % str(st["label"]))
+	_p4_open_shop()
+	_refresh_hud()
+
+func _p4_buy_decor(id: String) -> void:
+	for item in Phase4Data.decor_items():
+		var it: Dictionary = item
+		if str(it["id"]) == id:
+			if _p4_decor_owned.has(id):
+				_p4_place_decor(id)
+				return
+			if money < int(it["price"]):
+				_show_toast("Not enough money for %s (₹%d). You have ₹%d." % [str(it["label"]), int(it["price"]), money])
+				return
+			money -= int(it["price"])
+			_p4_decor_owned.append(id)
+			_p4_decor_placed.append(id)
+			_p4_refresh_dorm_decor()
+			_show_toast("Bought + placed: %s. It is in your dorm room now — store it from this panel any time." % str(it["label"]))
+			_p4_open_shop()
+			_refresh_hud()
+			return
+
+func _p4_place_decor(id: String) -> void:
+	if not _p4_decor_owned.has(id) or _p4_decor_placed.has(id):
+		return
+	_p4_decor_placed.append(id)
+	_p4_refresh_dorm_decor()
+	_show_toast("Placed in your room.")
+	_p4_open_shop()
+
+func _p4_store_decor(id: String) -> void:
+	if not _p4_decor_placed.has(id):
+		return
+	_p4_decor_placed.erase(id)
+	_p4_refresh_dorm_decor()
+	_show_toast("Stored. It stays in your inventory — place it again any time.")
+	_p4_open_shop()
+
+func _p4_buy_snack(idx: int) -> void:
+	var snacks: Array = Phase4Data.cafe_snacks()
+	if idx < 0 or idx >= snacks.size():
+		return
+	var s: Dictionary = snacks[idx]
+	if money < int(s["price"]):
+		_show_toast("Not enough money for %s (₹%d). You have ₹%d." % [str(s["label"]), int(s["price"]), money])
+		return
+	money -= int(s["price"])
+	energy = minf(100.0, energy + float(s["energy"]))
+	health = minf(100.0, health + float(s["health"]))
+	stress = clampf(stress + float(s["stress"]), 0.0, 100.0)
+	social = clampf(social + float(s["social"]), 0.0, 100.0)
+	_show_toast("%s! −₹%d, energy +%d." % [str(s["label"]), int(s["price"]), int(s["energy"])])
+	_refresh_hud()
+
+func _p4_open_shop() -> void:
+	if _shop_panel == null:
+		return
+	for child in _shop_list.get_children():
+		child.queue_free()
+	_shop_title.text = "🛍️ CITY SHOPS — MG Road • You have ₹%d" % money
+	var add_btn := func(text: String, fn: Callable) -> void:
+		var b := Button.new()
+		b.text = text
+		b.pressed.connect(fn)
+		_shop_list.add_child(b)
+	_shop_list.add_child(_mk_label("OUTFITS (city clothing store — buy once, re-wear free):", 16, Color(1.0, 0.95, 0.7)))
+	add_btn.call("Creation outfit (free)", func() -> void: _p4_outfit = -1; _p4_apply_custom_appearance(); _p4_open_shop(); _refresh_hud())
+	for i in range(Phase4Data.outfits().size()):
+		var o: Dictionary = Phase4Data.outfits()[i]
+		var owned := _p4_outfits_owned.has(i)
+		var worn := _p4_outfit == i
+		add_btn.call("%s — ₹%d%s%s" % [str(o["label"]), int(o["price"]), " (owned — wear)" if owned and not worn else "", " (wearing)" if worn else ""], _p4_buy_outfit.bind(i))
+	_shop_list.add_child(_mk_label("HAIRSTYLES:", 16, Color(1.0, 0.95, 0.7)))
+	add_btn.call("Creation hairstyle (free)", func() -> void: _p4_hairstyle = -1; _p4_apply_custom_appearance(); _p4_open_shop(); _refresh_hud())
+	for i in range(Phase4Data.hairstyles().size()):
+		var st: Dictionary = Phase4Data.hairstyles()[i]
+		var owned2 := _p4_hairstyles_owned.has(int(st["style"]))
+		var worn2 := _p4_hairstyle == int(st["style"])
+		add_btn.call("%s — ₹%d%s%s" % [str(st["label"]), int(st["price"]), " (owned — wear)" if owned2 and not worn2 else "", " (wearing)" if worn2 else ""], _p4_buy_hairstyle.bind(i))
+	_shop_list.add_child(_mk_label("DORM DÉCOR (buy once, place/store freely):", 16, Color(1.0, 0.95, 0.7)))
+	for item in Phase4Data.decor_items():
+		var it: Dictionary = item
+		var id := str(it["id"])
+		if _p4_decor_placed.has(id):
+			add_btn.call("%s — placed in room (Store it)" % str(it["label"]), _p4_store_decor.bind(id))
+		elif _p4_decor_owned.has(id):
+			add_btn.call("%s — owned, stored (Place it)" % str(it["label"]), _p4_place_decor.bind(id))
+		else:
+			add_btn.call("%s — ₹%d (buy + place)" % [str(it["label"]), int(it["price"])], _p4_buy_decor.bind(id))
+	_shop_list.add_child(_mk_label("CAFÉ STREET SNACKS:", 16, Color(1.0, 0.95, 0.7)))
+	for i in range(Phase4Data.cafe_snacks().size()):
+		var s: Dictionary = Phase4Data.cafe_snacks()[i]
+		add_btn.call("%s — ₹%d (+%d energy)" % [str(s["label"]), int(s["price"]), int(s["energy"])], _p4_buy_snack.bind(i))
+	_shop_panel.visible = true
+
+# --- dorm décor meshes (placed around the player's room corner) ---
+
+func _p4_decor_mesh(mesh: Mesh, mat: Material, pos: Vector3, scl: Vector3 = Vector3.ONE) -> void:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	mi.position = pos
+	mi.scale = scl
+	_p4_decor_node.add_child(mi)
+
+func _p4_refresh_dorm_decor() -> void:
+	if _p4_decor_node == null:
+		_p4_decor_node = Node3D.new()
+		_p4_decor_node.name = "DormDecor"
+		add_child(_p4_decor_node)
+	for child in _p4_decor_node.get_children():
+		child.queue_free()
+	var box := BoxMesh.new()
+	box.size = Vector3.ONE
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.5
+	cyl.bottom_radius = 0.5
+	cyl.height = 1.0
+	cyl.radial_segments = 12
+	var sph := SphereMesh.new()
+	sph.radius = 0.5
+	sph.height = 1.0
+	sph.radial_segments = 12
+	sph.rings = 8
+	var wood := StandardMaterial3D.new()
+	wood.albedo_color = Color(0.55, 0.42, 0.30)
+	wood.roughness = 0.85
+	var leaf := StandardMaterial3D.new()
+	leaf.albedo_color = Color(0.20, 0.45, 0.18)
+	leaf.roughness = 1.0
+	var pot := StandardMaterial3D.new()
+	pot.albedo_color = Color(0.65, 0.35, 0.20)
+	pot.roughness = 0.9
+	var rug_m := StandardMaterial3D.new()
+	rug_m.albedo_color = Color(0.60, 0.25, 0.30)
+	rug_m.roughness = 1.0
+	var lamp_glow := StandardMaterial3D.new()
+	lamp_glow.albedo_color = Color(1.0, 0.9, 0.6)
+	lamp_glow.emission_enabled = true
+	lamp_glow.emission = Color(1.0, 0.85, 0.5)
+	lamp_glow.emission_energy_multiplier = 1.2
+	for id in _p4_decor_placed:
+		match str(id):
+			"plant":
+				_p4_decor_mesh(cyl, pot, Vector3(-61, 0.25, 13), Vector3(0.56, 0.5, 0.56))
+				_p4_decor_mesh(sph, leaf, Vector3(-61, 0.85, 13), Vector3(0.9, 0.8, 0.9))
+				_p4_decor_mesh(sph, leaf, Vector3(-61.3, 0.65, 13.2), Vector3(0.5, 0.45, 0.5))
+			"lamp":
+				_p4_decor_mesh(cyl, wood, Vector3(-55.5, 0.8, 13), Vector3(0.1, 1.6, 0.1))
+				_p4_decor_mesh(sph, lamp_glow, Vector3(-55.5, 1.7, 13), Vector3(0.36, 0.36, 0.36))
+			"rug":
+				_p4_decor_mesh(box, rug_m, Vector3(-61.5, 0.03, 16), Vector3(2.2, 0.06, 1.6))
+			"shelf":
+				_p4_decor_mesh(box, wood, Vector3(-55.8, 0.9, 17.5), Vector3(1.2, 1.8, 0.4))
+				_p4_decor_mesh(box, rug_m, Vector3(-56.1, 0.6, 17.5), Vector3(0.3, 0.5, 0.3))
+				_p4_decor_mesh(box, leaf, Vector3(-55.5, 0.6, 17.5), Vector3(0.3, 0.5, 0.3))
+
+# --- dorm: invite a friend to your room ---
+
+func _p4_invite_room(npc: NPC) -> String:
+	if npc == null or not npc.is_main:
+		return "Room visits are for the Ten — invite a main character."
+	var nm := str(npc.data["name"])
+	if npc.friendship < 20:
+		return "%s is not sure yet — build a little friendship first (need 20, you are at %d)." % [nm, npc.friendship]
+	if _p4_room_guest != "":
+		return "You already have %s coming over. One guest at a time — the room is small." % _p4_room_guest
+	_p4_room_guest = nm
+	_p4_room_guest_day = day
+	npc.target_zone = "dorm"
+	npc.spot = _P4_ROOM_SPOT
+	npc.set_path(_path_to(npc.global_position, "dorm", _P4_ROOM_SPOT))
+	return "🏠 You invited %s to your room. They are walking over — be in the Residence Hall when they arrive." % nm
+
+func _p4_check_room_guest() -> void:
+	if _p4_room_guest == "":
+		return
+	var guest := _p3_npc_by_name(_p4_room_guest)
+	if guest == null:
+		_p4_room_guest = ""
+		return
+	if _p4_room_guest_day < day:
+		_p4_room_guest = ""
+		_p4_room_guest_day = -1
+		return
+	if guest.global_position.distance_to(_P4_ROOM_SPOT) < 4.0 and _player_zone() == "dorm":
+		guest.friendship = mini(100, guest.friendship + 4)
+		social = minf(100.0, social + 2.0)
+		_p3_post(_p4_room_guest, "Hung out in your dorm room — %s. Rooms tell the truth about people." % _p4_room_guest)
+		_show_toast("🏠 %s is in your room! Friendship +4, social +2." % _p4_room_guest)
+		_p4_room_invite_done = true
+		_p4_room_guest = ""
+		_p4_room_guest_day = -1
+
+# --- save deltas (Phase 4 block rides the Phase 2 delta system) ---
+
+func _p4_collect_state() -> Dictionary:
+	return {
+		"weather": _p4_weather, "clubs_joined": _p4_clubs_joined.duplicate(),
+		"club_attended": _p4_club_attended.duplicate(), "club_sessions": _p4_club_sessions,
+		"sport_sessions": _p4_sport_sessions, "sports_week_sessions": _p4_sports_week_sessions,
+		"sports_week_award": _p4_sports_week_award, "exams_sat": _p4_exams_sat.duplicate(),
+		"midsem_total": _p4_midsem_total, "midsem_count": _p4_midsem_count,
+		"final_total": _p4_final_total, "final_count": _p4_final_count,
+		"midsem_result": _p4_midsem_result, "final_results": _p4_final_results,
+		"week": _p4_week.duplicate(), "sem": _p4_sem.duplicate(),
+		"week_summaries": _p4_week_summaries.duplicate(), "city_visits": _p4_city_visits,
+		"outfit": _p4_outfit, "hairstyle": _p4_hairstyle,
+		"outfits_owned": _p4_outfits_owned.duplicate(), "hairstyles_owned": _p4_hairstyles_owned.duplicate(),
+		"decor_owned": _p4_decor_owned.duplicate(), "decor_placed": _p4_decor_placed.duplicate(),
+		"room_guest": _p4_room_guest, "room_guest_day": _p4_room_guest_day,
+		"room_invite_done": _p4_room_invite_done,
+		"ext_progress": _p4_ext_progress.duplicate(), "ext_done": _p4_ext_done.duplicate()
+	}
+
+func _p4_apply_state(d: Dictionary) -> void:
+	_p4_weather = str(d.get("weather", "clear"))
+	_p4_clubs_joined = (d.get("clubs_joined", []) as Array).duplicate()
+	_p4_club_attended = (d.get("club_attended", []) as Array).duplicate()
+	_p4_club_sessions = int(d.get("club_sessions", 0))
+	_p4_sport_sessions = int(d.get("sport_sessions", 0))
+	_p4_sports_week_sessions = int(d.get("sports_week_sessions", 0))
+	_p4_sports_week_award = bool(d.get("sports_week_award", false))
+	_p4_exams_sat = (d.get("exams_sat", {}) as Dictionary).duplicate()
+	_p4_midsem_total = int(d.get("midsem_total", 0))
+	_p4_midsem_count = int(d.get("midsem_count", 0))
+	_p4_final_total = int(d.get("final_total", 0))
+	_p4_final_count = int(d.get("final_count", 0))
+	_p4_midsem_result = str(d.get("midsem_result", ""))
+	_p4_final_results = str(d.get("final_results", ""))
+	_p4_week = (d.get("week", {}) as Dictionary).duplicate()
+	_p4_sem = (d.get("sem", {}) as Dictionary).duplicate()
+	_p4_week_summaries = (d.get("week_summaries", []) as Array).duplicate()
+	_p4_city_visits = int(d.get("city_visits", 0))
+	_p4_outfit = int(d.get("outfit", -1))
+	_p4_hairstyle = int(d.get("hairstyle", -1))
+	_p4_outfits_owned = (d.get("outfits_owned", []) as Array).duplicate()
+	_p4_hairstyles_owned = (d.get("hairstyles_owned", []) as Array).duplicate()
+	_p4_decor_owned = (d.get("decor_owned", []) as Array).duplicate()
+	_p4_decor_placed = (d.get("decor_placed", []) as Array).duplicate()
+	_p4_room_guest = str(d.get("room_guest", ""))
+	_p4_room_guest_day = int(d.get("room_guest_day", -1))
+	_p4_room_invite_done = bool(d.get("room_invite_done", false))
+	_p4_ext_progress = (d.get("ext_progress", {}) as Dictionary).duplicate()
+	_p4_ext_done = (d.get("ext_done", {}) as Dictionary).duplicate()
+
+func _p4_after_load() -> void:
+	if _p4_outfit >= 0 or _p4_hairstyle >= 0:
+		_p4_apply_custom_appearance()
+	_p4_refresh_dorm_decor()
+
+# --- Phase 4 headless tests ---
+
+func _run_phase4_tests() -> bool:
+	var ok := true
+	print("[TEST_P4] Phase 4 checks: clubs, sports, weather, tiers, city, exams, summaries, extensions, dorm, persistence")
+	# 1) Clubs: 8 defined, join two, third refused, attendance counted.
+	if Phase4Data.clubs().size() != 8:
+		print("[TEST_P4_FAIL] expected 8 clubs, got ", Phase4Data.clubs().size())
+		ok = false
+	energy = 95.0
+	var tech_before := int(_skill_xp.get("Tech", 0))
+	_player.global_position = ZONE_CENTERS["union"]
+	game_minutes = 16.3 * 60.0
+	_p4_club_session("coding")
+	if not _p4_clubs_joined.has("coding") or _p4_club_sessions < 1:
+		print("[TEST_P4_FAIL] coding club join/attend failed")
+		ok = false
+	if int(_skill_xp.get("Tech", 0)) <= tech_before:
+		print("[TEST_P4_FAIL] coding session gave no Tech XP")
+		ok = false
+	_player.global_position = ZONE_CENTERS["sports"]
+	_p4_club_session("football")
+	if not _p4_clubs_joined.has("football"):
+		print("[TEST_P4_FAIL] football club join failed")
+		ok = false
+	var sessions_before := _p4_club_sessions
+	_player.global_position = ZONE_CENTERS["quad"]
+	_p4_club_session("dance")
+	if _p4_clubs_joined.size() != 2 or _p4_club_sessions != sessions_before:
+		print("[TEST_P4_FAIL] max-2-clubs rule not enforced")
+		ok = false
+	print("[TEST_P4] clubs OK: joined=", _p4_clubs_joined, " sessions=", _p4_club_sessions)
+	# 2) Sports: all five actions, anchored, XP + health.
+	energy = 95.0
+	var sport_before := int(_skill_xp.get("Sport", 0))
+	var health_before := health
+	for kind in ["football", "basketball", "running", "gym", "swim"]:
+		var s: Dictionary = Phase4Data.sports()[kind]
+		_player.global_position = s["anchor"]
+		_p4_sport(kind)
+	if _p4_sport_sessions < 5 or int(_skill_xp.get("Sport", 0)) <= sport_before or health <= health_before:
+		print("[TEST_P4_FAIL] sports sessions/XP/health did not rise (sessions=", _p4_sport_sessions, ")")
+		ok = false
+	print("[TEST_P4] sports OK: sessions=", _p4_sport_sessions, " Sport XP=", int(_skill_xp.get("Sport", 0)))
+	# 3) Weather table + rain redirect (quad club crowd moves to union).
+	if Phase4Data.weather_for_day(1) != "clear" or Phase4Data.weather_for_day(7) != "rain" or Phase4Data.weather_for_day(10) != "rain":
+		print("[TEST_P4_FAIL] weather table mismatch (day1=", Phase4Data.weather_for_day(1), " day7=", Phase4Data.weather_for_day(7), ")")
+		ok = false
+	var bg0: NPC = _bgs[0]
+	var old_club: String = str(bg0.data.get("club", "quad"))
+	bg0.data["club"] = "quad"
+	_p4_weather = "rain"
+	game_minutes = 17.0 * 60.0
+	_update_schedules()
+	if bg0.target_zone != "union":
+		print("[TEST_P4_FAIL] rain redirect failed: bg0 target=", bg0.target_zone)
+		ok = false
+	bg0.data["club"] = old_club
+	_p4_weather = "clear"
+	print("[TEST_P4] weather OK: day1 clear, day7 rain, rain redirect quad->union")
+	# 4) Sim tiers: boundaries + live distance check.
+	if _p4_tier_for(20.0) != 0 or _p4_tier_for(50.0) != 1 or _p4_tier_for(100.0) != 2:
+		print("[TEST_P4_FAIL] tier boundaries wrong")
+		ok = false
+	_player.global_position = Vector3(0, 0.1, -5)
+	bg0.global_position = Vector3(0, 0.1, -5)
+	var bg1: NPC = _bgs[1]
+	bg1.global_position = Vector3(58, 0.1, -58)
+	_p4_apply_tiers(true)
+	if bg0.sim_tier != 0 or bg1.sim_tier != 2:
+		print("[TEST_P4_FAIL] live tiers wrong: near=", bg0.sim_tier, " far=", bg1.sim_tier)
+		ok = false
+	print("[TEST_P4] tiers OK: near 0, far 2")
+	# 5) City: bus out, shop buys, bus back.
+	money = 5000
+	_player.global_position = Vector3(-11, 0.1, 90)
+	var money_before := money
+	_p4_bus_to_city()
+	if money != money_before - Phase4Data.city_bus_fare() or _player.global_position != Vector3(0, 0.1, 120) or _player_zone() != "city":
+		print("[TEST_P4_FAIL] bus to city failed: money=", money, " pos=", _player.global_position, " zone=", _player_zone())
+		ok = false
+	if _p4_city_visits < 1:
+		print("[TEST_P4_FAIL] city visit not counted")
+		ok = false
+	_p4_buy_outfit(0)
+	if _p4_outfit != 0 or money != money_before - Phase4Data.city_bus_fare() - int(Phase4Data.outfits()[0]["price"]):
+		print("[TEST_P4_FAIL] outfit buy failed: outfit=", _p4_outfit, " money=", money)
+		ok = false
+	energy = 50.0
+	_p4_buy_snack(0)
+	if energy <= 50.0:
+		print("[TEST_P4_FAIL] café snack gave no energy")
+		ok = false
+	_p4_buy_decor("plant")
+	if not _p4_decor_owned.has("plant") or not _p4_decor_placed.has("plant"):
+		print("[TEST_P4_FAIL] décor buy/place failed")
+		ok = false
+	_p4_store_decor("plant")
+	if _p4_decor_placed.has("plant") or not _p4_decor_owned.has("plant"):
+		print("[TEST_P4_FAIL] décor store failed")
+		ok = false
+	_p4_place_decor("plant")
+	if not _p4_decor_placed.has("plant"):
+		print("[TEST_P4_FAIL] décor re-place failed")
+		ok = false
+	_player.global_position = Vector3(7, 0.1, 120)
+	money_before = money
+	_p4_bus_to_campus()
+	if money != money_before - Phase4Data.city_bus_fare() or _player.global_position != Vector3(0, 0.1, 88) or _player_zone() != "gate":
+		print("[TEST_P4_FAIL] bus back failed: money=", money, " pos=", _player.global_position, " zone=", _player_zone())
+		ok = false
+	print("[TEST_P4] city OK: visits=", _p4_city_visits, " outfit=", _p4_outfit, " décor placed=", _p4_decor_placed)
+	# 6) Exams: 3 mid-sem sittings, results Day 57, 5 finals, results Day 85.
+	energy = 95.0
+	_player.global_position = ZONE_CENTERS["lecture"]
+	for d in [52, 53, 54]:
+		day = d
+		_p4_take_exam()
+	if _p4_exams_sat.size() != 3:
+		print("[TEST_P4_FAIL] mid-sem sittings: ", _p4_exams_sat.size())
+		ok = false
+	for k in _p4_exams_sat.keys():
+		if int(_p4_exams_sat[k]) < 35 or int(_p4_exams_sat[k]) > 98:
+			print("[TEST_P4_FAIL] marks out of range: ", _p4_exams_sat[k])
+			ok = false
+	day = 57
+	_p4_on_day_start()
+	if _p4_midsem_result == "":
+		print("[TEST_P4_FAIL] mid-sem results empty")
+		ok = false
+	energy = 95.0
+	for d in [78, 79, 80, 81, 82]:
+		day = d
+		_p4_take_exam()
+	day = 85
+	_p4_on_day_start()
+	if _p4_final_results == "" or _p4_exams_sat.size() != 8:
+		print("[TEST_P4_FAIL] final results/sittings: results='", _p4_final_results, "' sittings=", _p4_exams_sat.size())
+		ok = false
+	print("[TEST_P4] exams OK: mid='", _p4_midsem_result, "' final='", _p4_final_results, "'")
+	# 7) Week summary + Sports Meet award.
+	_p4_week["lectures"] = 5
+	_p4_week["study"] = 4
+	day = 8
+	_p4_on_day_start()
+	if _p4_week_summaries.is_empty():
+		print("[TEST_P4_FAIL] week summary not produced")
+		ok = false
+	_p4_sports_week_sessions = 4
+	day = 71
+	_p4_on_day_start()
+	if not _p4_sports_week_award:
+		print("[TEST_P4_FAIL] sports meet award not given")
+		ok = false
+	print("[TEST_P4] summaries OK: ", _p4_week_summaries.size(), " award=", _p4_sports_week_award)
+	# 8) Continued arcs: 10 x 4 steps; Anirudh end-to-end (club step
+	# already done by the club test above, so progress starts at 1).
+	var exts: Dictionary = Phase4Data.arc_extensions()
+	if exts.size() != 10:
+		print("[TEST_P4_FAIL] expected 10 continued arcs, got ", exts.size())
+		ok = false
+	for nm in exts.keys():
+		if (exts[nm] as Dictionary)["steps"].size() != 4:
+			print("[TEST_P4_FAIL] continued arc ", nm, " is not 4 steps")
+			ok = false
+	var ani := _p3_npc_by_name("Anirudh")
+	if _p4_ext_prog("Anirudh") != 1:
+		print("[TEST_P4_FAIL] Anirudh ext step 1 (club:coding) not recorded: ", _p4_ext_prog("Anirudh"))
+		ok = false
+	_p3_on_talk(ani)
+	if _p4_ext_prog("Anirudh") != 2:
+		print("[TEST_P4_FAIL] Anirudh ext step 2 (talk) failed: ", _p4_ext_prog("Anirudh"))
+		ok = false
+	_p3_on_action("job")
+	if _p4_ext_prog("Anirudh") != 3:
+		print("[TEST_P4_FAIL] Anirudh ext step 3 (job) failed: ", _p4_ext_prog("Anirudh"))
+		ok = false
+	_p3_check_zone("union", true)
+	if not bool(_p4_ext_done.get("Anirudh", false)):
+		print("[TEST_P4_FAIL] Anirudh ext step 4 (visit:union) failed")
+		ok = false
+	print("[TEST_P4] continued arcs OK: Anirudh complete, all 10 x 4 steps")
+	# 9) Dorm invite: guest arrives (teleported, simulated) and is welcomed.
+	var invite_text := _p4_invite_room(ani)
+	if _p4_room_guest != "Anirudh":
+		print("[TEST_P4_FAIL] room invite failed: ", invite_text)
+		ok = false
+	ani.global_position = _P4_ROOM_SPOT
+	_player.global_position = Vector3(-66, 0.1, 18)
+	_p4_check_room_guest()
+	if _p4_room_guest != "" or not _p4_room_invite_done:
+		print("[TEST_P4_FAIL] room guest welcome failed: guest='", _p4_room_guest, "' done=", _p4_room_invite_done)
+		ok = false
+	print("[TEST_P4] dorm invite OK")
+	# 10) Customisation persistence via the save-delta system.
+	_p4_outfit = 1
+	_p4_hairstyle = 6
+	_p4_decor_owned = ["plant", "rug"]
+	_p4_decor_placed = ["plant"]
+	_p4_clubs_joined = ["coding", "football"]
+	_p4_city_visits = 3
+	var keep_outfit := _p4_outfit
+	var keep_hair := _p4_hairstyle
+	var keep_decor: Array = _p4_decor_placed.duplicate()
+	var keep_clubs: Array = _p4_clubs_joined.duplicate()
+	var keep_visits := _p4_city_visits
+	var keep_ext := _p4_ext_prog("Anirudh")
+	SaveSystem.save(3, _collect_state())
+	_p4_outfit = -1
+	_p4_hairstyle = -1
+	_p4_decor_owned = []
+	_p4_decor_placed = []
+	_p4_clubs_joined = []
+	_p4_city_visits = 0
+	_p4_ext_progress = {}
+	var loaded := SaveSystem.load_slot(3)
+	if loaded.is_empty():
+		print("[TEST_P4_FAIL] save slot 3 did not load")
+		ok = false
+	else:
+		_apply_state(loaded)
+		if _p4_outfit != keep_outfit or _p4_hairstyle != keep_hair or _p4_decor_placed != keep_decor or _p4_clubs_joined != keep_clubs or _p4_city_visits != keep_visits or _p4_ext_prog("Anirudh") != keep_ext:
+			print("[TEST_P4_FAIL] persistence round-trip mismatch: outfit=", _p4_outfit, " hair=", _p4_hairstyle, " decor=", _p4_decor_placed, " clubs=", _p4_clubs_joined, " visits=", _p4_city_visits, " ext=", _p4_ext_prog("Anirudh"))
+			ok = false
+	print("[TEST_P4] persistence OK: outfit=", _p4_outfit, " hair=", _p4_hairstyle, " decor=", _p4_decor_placed)
+	print("[TEST_P4] Phase 4 result: ", "PASS" if ok else "FAIL")
+	return ok
+
+# --- 12-week semester harness (synchronous day-step, NOT real-time) ---
+
+func _p4_reset_for_harness() -> void:
+	day = 1
+	game_minutes = 450.0
+	money = 500
+	energy = 95.0
+	gpa = 7.5
+	health = 80.0
+	stress = 30.0
+	social = 50.0
+	skills = {"Study": 1, "Sport": 1, "Music/Art": 1, "Tech": 1, "Communication": 1}
+	_skill_xp = {"Study": 0, "Sport": 0, "Music/Art": 0, "Tech": 0, "Communication": 0}
+	player_name = "New Student"
+	player_major = "Computer Science"
+	_appearance_idx = 0
+	_attended_keys = []
+	_jobs_today = {}
+	_jobs_total = {}
+	_earned_total = 0
+	_messages = []
+	_buzz = []
+	_p3_arc_progress = {}
+	_p3_arc_done = {}
+	_p3_teacher_progress = {}
+	_p3_teacher_done = {}
+	_p3_story_idx = 0
+	_p3_favours = []
+	_p3_favours_done = 0
+	_p3_invitations = []
+	_p3_social_posts = []
+	_p3_gossip_log = []
+	_p3_events_attended = []
+	_fest_practice = 0
+	_p3_holi_done = false
+	_p3_fest_result = ""
+	_romance_partner = ""
+	_teacher_letters = []
+	_city_trip_day = -1
+	_p4_weather = "clear"
+	_p4_clubs_joined = []
+	_p4_club_attended = []
+	_p4_club_sessions = 0
+	_p4_sport_sessions = 0
+	_p4_sports_week_sessions = 0
+	_p4_sports_week_award = false
+	_p4_exams_sat = {}
+	_p4_midsem_total = 0
+	_p4_midsem_count = 0
+	_p4_final_total = 0
+	_p4_final_count = 0
+	_p4_midsem_result = ""
+	_p4_final_results = ""
+	_p4_week = {"lectures": 0, "study": 0, "clubs": 0, "sports": 0, "jobs": 0, "earned": 0, "exams": 0}
+	_p4_sem = {"lectures": 0, "study": 0, "clubs": 0, "sports": 0, "jobs": 0, "earned": 0, "exams": 0}
+	_p4_week_summaries = []
+	_p4_city_visits = 0
+	_p4_outfit = -1
+	_p4_hairstyle = -1
+	_p4_outfits_owned = []
+	_p4_hairstyles_owned = []
+	_p4_decor_owned = []
+	_p4_decor_placed = []
+	_p4_room_guest = ""
+	_p4_room_guest_day = -1
+	_p4_room_invite_done = false
+	_p4_ext_progress = {}
+	_p4_ext_done = {}
+	_p4_prompt_club = ""
+	var mi := 0
+	for n in _mains:
+		var npc := n as NPC
+		npc.friendship = 22 + (mi * 3) % 14
+		npc.chats = 0
+		npc.compliments_today = 0
+		npc.learned_hobby = false
+		npc.learned_secret = false
+		npc.memory_notes = []
+		npc.dialogue_seen = {}
+		npc.office_help_day = -1
+		npc.talking = false
+		npc.stationary = false
+		npc.path = []
+		npc.seated = false
+		npc.sim_tier = 0
+		mi += 1
+	for n in _teachers:
+		var npc := n as NPC
+		npc.friendship = 25
+		npc.chats = 0
+		npc.office_help_day = -1
+		npc.talking = false
+		npc.path = []
+		npc.sim_tier = 0
+	for n in _bgs:
+		var npc := n as NPC
+		npc.talking = false
+		npc.stationary = false
+		npc.path = []
+		npc.seated = false
+		npc.sim_tier = 0
+	_init_phase2()
+	var hour := game_minutes / 60.0
+	for n in _all_npcs:
+		var npc := n as NPC
+		if npc.is_staff or npc.talking:
+			continue
+		var zone := _segment_for(npc.data, hour)
+		var idx := _all_npcs.find(npc)
+		var spot: Vector3 = _pick_spot(npc, zone, idx)
+		npc.global_position = spot
+		npc.spot = spot
+		npc.target_zone = zone
+		npc.set_path([])
+	_player.global_position = Vector3(0, 0.1, 84)
+	_p4_apply_custom_appearance()
+	_p4_refresh_dorm_decor()
+	_refresh_hud()
+
+func _run_semester_harness() -> bool:
+	_p4_reset_for_harness()
+	var fails: Array = []
+	print("[TEST_P4_SEM] 12-week semester harness: synchronous day-step, Days 1-85 (no real-time clock)")
+	var ani := _p3_npc_by_name("Anirudh")
+	var rag := _p3_npc_by_name("Prof. Raghavan")
+	var own_block: String = str(Phase2Data.major_info(player_major)["block"])
+	while day <= 85:
+		var d := day
+		var weekday := (day - 1) % 7
+		# Day 1 storyline + base-arc setup: teacher talk, Kickabout
+		# check-in (group event), study, Anirudh talk + union visit.
+		if d == 1:
+			_p3_on_talk(rag)
+			_player.global_position = ZONE_CENTERS["sports"]
+			game_minutes = 17.3 * 60.0
+			_p3_check_in()
+			_player.global_position = ZONE_CENTERS["library"]
+			_do_study(false)
+			_p3_on_talk(ani)
+			_p3_check_zone("union", true)
+		# Lectures: all three weekday slots, correct answers.
+		if weekday < 5:
+			_player.global_position = ZONE_CENTERS[own_block]
+			for slot in ["am1", "am2", "pm"]:
+				_qa_period = slot
+				_qa_answer = 1
+				_qa_answer_pressed(1)
+		# Daily study in the library; submit the moment an assignment
+		# hits 100% (due Days 5/12/19 — always on time this way).
+		_player.global_position = ZONE_CENTERS["library"]
+		_do_study(false)
+		var cur: Variant = _current_assignment()
+		if cur != null and int(cur["progress"]) >= 100 and not bool(cur["submitted"]):
+			_do_submit()
+		# Weekday library shift.
+		if weekday < 5:
+			_player.global_position = ZONE_CENTERS["library"]
+			_do_job("library")
+		# Clubs: coding Mondays (union 16:00), football Fridays (sports).
+		if weekday == 0:
+			_player.global_position = ZONE_CENTERS["union"]
+			game_minutes = 16.3 * 60.0
+			_p4_club_session("coding")
+		if weekday == 4:
+			_player.global_position = ZONE_CENTERS["sports"]
+			game_minutes = 16.3 * 60.0
+			_p4_club_session("football")
+		# Sports: Mon running, Wed basketball, Fri gym.
+		if weekday == 0:
+			_player.global_position = Vector3(-52, 0.1, 42)
+			_p4_sport("running")
+		if weekday == 2:
+			_player.global_position = Vector3(-14, 0.1, 34)
+			_p4_sport("basketball")
+		if weekday == 4:
+			_player.global_position = Vector3(-10, 0.1, 44)
+			_p4_sport("gym")
+		# Fest practice: Art Jam Tuesdays (garden 17:00), Dance Break
+		# Fridays (quad 17:00), Open Mic Saturdays (union 17:00).
+		if weekday == 1:
+			_player.global_position = ZONE_CENTERS["garden"]
+			game_minutes = 17.3 * 60.0
+			_p3_check_in()
+		if weekday == 4:
+			_player.global_position = ZONE_CENTERS["quad"]
+			game_minutes = 17.3 * 60.0
+			_p3_check_in()
+		if weekday == 5:
+			_player.global_position = ZONE_CENTERS["union"]
+			game_minutes = 17.3 * 60.0
+			_p3_check_in()
+		# Anirudh continued arc, end-to-end, on Day 8 (after the Monday
+		# coding session already banked ext step 1).
+		if d == 8:
+			_p3_on_talk(ani)
+			_p3_on_action("job")
+			_p3_check_zone("union", true)
+		# Dorm invite, Day 10 (guest teleported to the room spot — a
+		# simulated arrival — then welcomed with the player in dorm).
+		if d == 10:
+			_p4_invite_room(ani)
+			ani.global_position = _P4_ROOM_SPOT
+			_player.global_position = Vector3(-66, 0.1, 18)
+			_p4_check_room_guest()
+		# City Sundays: bus out, buys on Days 7/14, bus back.
+		if weekday == 6:
+			_player.global_position = Vector3(-11, 0.1, 90)
+			_p4_bus_to_city()
+			if d == 7:
+				_p4_buy_outfit(0)
+			if d == 14:
+				_p4_buy_decor("plant")
+				_p4_buy_decor("rug")
+			_player.global_position = Vector3(7, 0.1, 120)
+			_p4_bus_to_campus()
+		# Holi, Day 63.
+		if d == 63:
+			_player.global_position = ZONE_CENTERS["quad"]
+			_p3_check_zone("quad", true)
+		# Exams on every sitting day.
+		if Phase4Data.midsem_days().has(d) or Phase4Data.final_days().has(d):
+			_player.global_position = ZONE_CENTERS[own_block]
+			_p4_take_exam()
+		# End the day in the dorm; _advance_day rolls everything over.
+		_player.global_position = Vector3(-66, 0.1, 18)
+		_do_sleep()
+		if day != d + 1:
+			fails.append("day did not advance after sleep on Day %d (now %d)" % [d, day])
+			break
+	print("[TEST_P4_SEM] harness reached Day ", day, " (loop ended at 86)")
+	if day != 86:
+		fails.append("final day != 86 (got %d)" % day)
+	if _p4_midsem_result == "":
+		fails.append("mid-sem results empty")
+	if _p4_final_results == "":
+		fails.append("final results empty")
+	if _p4_week_summaries.size() != 12:
+		fails.append("week summaries != 12 (got %d)" % _p4_week_summaries.size())
+	if _p3_story_idx != 4:
+		fails.append("storyline idx != 4 (got %d)" % _p3_story_idx)
+	if _p4_clubs_joined.size() != 2:
+		fails.append("clubs != 2 (got %s)" % str(_p4_clubs_joined))
+	if _p4_city_visits < 10:
+		fails.append("city visits < 10 (got %d)" % _p4_city_visits)
+	if _p4_outfit < 0:
+		fails.append("no outfit bought")
+	if _p4_decor_placed.size() < 2:
+		fails.append("décor placed < 2 (got %s)" % str(_p4_decor_placed))
+	if not _p4_room_invite_done:
+		fails.append("room invite not completed")
+	if not bool(_p4_ext_done.get("Anirudh", false)):
+		fails.append("Anirudh continued arc not done")
+	if _fest_practice < 3:
+		fails.append("fest practice < 3 (got %d)" % _fest_practice)
+	if not _p4_sports_week_award:
+		fails.append("sports meet award not given")
+	if _p4_exams_sat.size() != 8:
+		fails.append("exams sat != 8 (got %d)" % _p4_exams_sat.size())
+	if money < 0:
+		fails.append("money negative (₹%d)" % money)
+	if gpa < 0.0 or gpa > 10.0:
+		fails.append("GPA out of range (%.2f)" % gpa)
+	print("[TEST_P4_SEM] final: day=", day, " GPA=%.2f" % gpa, " money=₹", money, " clubs=", _p4_clubs_joined, " city_visits=", _p4_city_visits, " outfit=", _p4_outfit, " decor=", _p4_decor_placed, " exams=", _p4_exams_sat.size(), " summaries=", _p4_week_summaries.size(), " story_idx=", _p3_story_idx, " fest_practice=", _fest_practice, " sports_award=", _p4_sports_week_award)
+	print("[TEST_P4_SEM] mid-sem: ", _p4_midsem_result)
+	print("[TEST_P4_SEM] final: ", _p4_final_results)
+	print("[TEST_P4_SEM] semester totals: ", _p4_sem)
+	for f in fails:
+		print("[TEST_P4_SEM_FAIL] ", f)
+	print("[TEST_P4_SEM] Semester harness result: ", "PASS" if fails.is_empty() else "FAIL")
+	return fails.is_empty()
+
 # ---------------- UI ----------------
 
 func _mk_label(text: String, size: int = 20, color: Color = Color.WHITE) -> Label:
@@ -2292,6 +3619,15 @@ func _build_ui() -> void:
 	_dlg_letter_btn.pressed.connect(func() -> void: _dlg_choice("p3_letter"))
 	_dlg_btns3.add_child(_dlg_letter_btn)
 	_dlg_btns3.visible = false
+	# Phase 4 dialogue fourth row: invite a main to your dorm room.
+	_dlg_btns4 = HBoxContainer.new()
+	_dlg_btns4.add_theme_constant_override("separation", 8)
+	dv.add_child(_dlg_btns4)
+	_dlg_invite_btn = Button.new()
+	_dlg_invite_btn.text = "🏠 Invite to my room"
+	_dlg_invite_btn.pressed.connect(func() -> void: _dlg_choice("p4_invite_room"))
+	_dlg_btns4.add_child(_dlg_invite_btn)
+	_dlg_btns4.visible = false
 	# ---- Phone panel (Tab) ----
 	_phone_panel = PanelContainer.new()
 	_phone_panel.set_anchors_preset(Control.PRESET_CENTER)
@@ -2363,6 +3699,24 @@ func _build_ui() -> void:
 	svclose.text = "Close"
 	svclose.pressed.connect(func() -> void: _save_panel.visible = false)
 	sv.add_child(svclose)
+	# ---- Phase 4 shop panel (city clothing store / café / campus shops) ----
+	_shop_panel = PanelContainer.new()
+	_shop_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_shop_panel.position = Vector2(-280, -300)
+	_shop_panel.custom_minimum_size = Vector2(560, 600)
+	_shop_panel.visible = false
+	layer.add_child(_shop_panel)
+	var shv := VBoxContainer.new()
+	_shop_panel.add_child(shv)
+	_shop_title = _mk_label("🛍️ CITY SHOPS — MG Road", 20, Color(1.0, 0.95, 0.7))
+	shv.add_child(_shop_title)
+	_shop_list = VBoxContainer.new()
+	_shop_list.add_theme_constant_override("separation", 4)
+	shv.add_child(_shop_list)
+	var shclose := Button.new()
+	shclose.text = "Close"
+	shclose.pressed.connect(func() -> void: _shop_panel.visible = false)
+	shv.add_child(shclose)
 	# ---- Character creation panel (normal play only) ----
 	_create_panel = PanelContainer.new()
 	_create_panel.set_anchors_preset(Control.PRESET_CENTER)
@@ -2723,6 +4077,55 @@ func _run_captures() -> void:
 	await get_tree().create_timer(0.9).timeout
 	await _shot_file("shot16_arc_dialogue.png")
 	_close_dialogue()
+	# ---- Phase 4 shots ----
+	# shot17: the city district street (MG Road) with foot traffic.
+	_stage(_bgs[0], Vector3(-6, 0, 136), 0.2)
+	_stage(_bgs[1], Vector3(2, 0, 136), -0.3)
+	_stage(_bgs[2], Vector3(6, 0, 140), 0.5)
+	_stage(_bgs[3], Vector3(-2, 0, 142), -0.1)
+	_stage(_bgs[4], Vector3(4, 0, 132), 0.0)
+	_stage(_bgs[5], Vector3(-10, 0, 140), 0.4)
+	_player.global_position = Vector3(-130, 0, 100)
+	# Phase 4 completion fix: shoot from the park side looking NORTH so
+	# the Style Studio / Café Street shopfronts read behind the foot
+	# traffic (the first take looked south and showed only apartments).
+	_shot(cam, Vector3(2, 1.7, 150), Vector3(-8, 1.5, 130))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot17_city_street.png")
+	# shot18: a football club session on the pitch, street-level.
+	# Diagonal camera with lateral spread — no two players share the
+	# camera axis (the first take stacked Jatin/Chirag labels).
+	_stage(_mains[4], Vector3(-52, 0, 60), 0.785)
+	_stage(_mains[3], Vector3(-55, 0, 63), 1.14)
+	_stage(_bgs[6], Vector3(-49, 0, 63), 0.785)
+	_stage(_bgs[7], Vector3(-58, 0, 60), 1.05)
+	_player.global_position = Vector3(-130, 0, 100)
+	_shot(cam, Vector3(-42, 1.7, 70), Vector3(-56, 1.2, 60))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot18_club_sports.png")
+	# shot19: the player's decorated dorm room corner.
+	# Shot from the WEST side: the "MY ROOM" sign faces west, so an
+	# east-side camera saw it mirrored. Anirudh faces the camera.
+	_p4_decor_owned = ["plant", "lamp", "rug"]
+	_p4_decor_placed = ["plant", "lamp", "rug"]
+	_p4_refresh_dorm_decor()
+	_stage(_mains[0], Vector3(-58, 0, 14), -0.8)
+	_player.global_position = Vector3(-130, 0, 100)
+	_shot(cam, Vector3(-62, 1.7, 18), Vector3(-57, 1.2, 14.5))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot19_dorm_room.png")
+	# shot20: rain over the avenue (weather system visible).
+	# The player stands just behind the camera so the rain volume
+	# (which follows the player) covers the frame, without the player
+	# appearing in it.
+	_p4_weather = "rain"
+	_player.global_position = Vector3(8, 0.1, 52)
+	_update_sun()
+	_shot(cam, Vector3(2, 1.7, 55), Vector3(0, 1.5, 25))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot20_rain_avenue.png")
+	_p4_weather = "clear"
+	_update_sun()
 	_player.global_position = Vector3(-130, 0, 100)
 	print("[CAPTURE] done")
 	get_tree().quit(0)

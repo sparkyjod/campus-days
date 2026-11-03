@@ -34,6 +34,12 @@ var path_idx: int = 0
 var speed: float = 1.45
 var talking: bool = false
 var seated: bool = false
+# Phase 4 (Section 15.2): distance-based simulation tiers. 0 = near
+# (full sim), 1 = mid (half movement rate), 2 = far (schedule-only:
+# straight-line stepping to the spot, idle clip, no pathfinding).
+# Main forces tier 0 in test/capture mode so arrival evidence stays valid.
+var sim_tier: int = 0
+var _move_speed: float = 1.45
 # Capture-only: when true, _process skips movement and animation updates so
 # a frozen mid-stride pose set by the screenshot tour is not overridden by
 # the idle clip (the cause of the old shot9 straight-leg frame).
@@ -114,7 +120,7 @@ func _update_anim() -> void:
 	if talking:
 		_play("talk", 1.0)
 	elif _moving:
-		_play("walk", clampf(speed / 1.55, 0.6, 2.6))
+		_play("walk", clampf(_move_speed / 1.55, 0.6, 2.6))
 	elif seated:
 		_play("sit", 1.0)
 	elif _bubble.visible:
@@ -133,21 +139,38 @@ func _process(delta: float) -> void:
 	if talking or stationary:
 		_update_anim()
 		return
+	# Phase 4 far tier: schedule-only stepping — straight toward the spot
+	# (no pathfinding, idle clip). The player is >70 m away, so the
+	# simplification is invisible in play and free in test mode (tier 0).
+	if sim_tier == 2:
+		var to_spot := Vector3(spot.x - global_position.x, 0, spot.z - global_position.z)
+		var d := to_spot.length()
+		if d > 0.5:
+			var dir := to_spot / d
+			global_position += dir * speed * 1.6 * delta
+			rotation.y = lerp_angle(rotation.y, atan2(dir.x, dir.z), delta * 8.0)
+		_play("idle", 1.0)
+		return
+	_move_speed = speed * (0.55 if sim_tier == 1 else 1.0)
 	if path_idx < path.size():
 		var target: Vector3 = path[path_idx]
-		target.y = global_position.y
-		var to := target - global_position
-		to.y = 0
+		# 2D arrival test, but y eases toward the path point's height so
+		# tier-seat arrivals rise onto the platform instead of floating.
+		var to := Vector2(target.x - global_position.x, target.z - global_position.z)
 		var dist := to.length()
 		if dist < 0.35:
 			path_idx += 1
 		else:
 			var dir := to / dist
-			global_position += dir * speed * delta
+			global_position.x += dir.x * _move_speed * delta
+			global_position.z += dir.y * _move_speed * delta
+			global_position.y = lerpf(global_position.y, target.y, delta * 6.0)
 			_moving = true
 			# face movement
-			var target_yaw := atan2(dir.x, dir.z)
+			var target_yaw := atan2(dir.x, dir.y)
 			rotation.y = lerp_angle(rotation.y, target_yaw, delta * 8.0)
 	elif seated:
 		rotation.y = lerp_angle(rotation.y, seat_yaw, delta * 5.0)
+		# Tier seats sit on platforms: ease y to the seat height on arrival.
+		global_position.y = lerpf(global_position.y, spot.y, delta * 5.0)
 	_update_anim()

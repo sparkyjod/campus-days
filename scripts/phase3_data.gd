@@ -120,7 +120,7 @@ static func storyline() -> Array:
 		{"title": "Orientation: meet the faculty", "desc": "Talk to any teacher and introduce yourself.", "action": "talk_teacher"},
 		{"title": "Fest week: join campus life", "desc": "Attend any group event (Stories tab: Check in here).", "action": "group_event"},
 		{"title": "Exams approach: prepare", "desc": "Study in the library — preparation, not panic.", "action": "study"},
-		{"title": "Results Day", "desc": "Reach Day 70. Grades are published at the Admin Block.", "action": "results_day"}
+		{"title": "Results Day", "desc": "Reach Day 85. Final results are published after the Week 12 finals.", "action": "results_day"}
 	]
 
 # ---------------- favours (templates; giver fills {name}) ----------------

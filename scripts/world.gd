@@ -501,6 +501,10 @@ static func build(parent: Node3D) -> Dictionary:
 	# --- sports complex: pitch, track, goals, stands, floodlights, basketball
 	_build_sports()
 
+	# --- Phase 4: gym + pool (sports complex east edge) and the city district
+	_build_gym_pool()
+	_build_city()
+
 	# --- trees, bushes, benches, lamps, boards, bins, signposts
 	var tree_spots := [Vector3(-30, 0, -20), Vector3(30, 0, -20), Vector3(-30, 0, 10), Vector3(30, 0, 10), Vector3(-12, 0, -19), Vector3(12, 0, 9), Vector3(-95, 0, -30), Vector3(95, 0, -30), Vector3(-100, 0, 40), Vector3(100, 0, 40), Vector3(-20, 0, 84), Vector3(22, 0, 84), Vector3(90, 0, -70), Vector3(-90, 0, -70), Vector3(0, 0, -34), Vector3(-104, 0, -6), Vector3(104, 0, -6), Vector3(30, 0, 34), Vector3(-32, 0, 34),
 		Vector3(-7.5, 0, 20), Vector3(7.5, 0, 52), Vector3(-7.5, 0, 66), Vector3(7.5, 0, 34), Vector3(-122, 0, -88), Vector3(122, 0, -88), Vector3(-126, 0, -50), Vector3(126, 0, -50), Vector3(12, 0, 70), Vector3(-38, 0, 72), Vector3(36, 0, 92), Vector3(-88, 0, 6), Vector3(88, 0, 8), Vector3(-14, 0, -34), Vector3(16, 0, -36), Vector3(-52, 0, 30), Vector3(84, 0, -30)]
@@ -549,16 +553,31 @@ static func build(parent: Node3D) -> Dictionary:
 		"quad": [Vector3(-8, 0, -12), Vector3(9, 0, 2), Vector3(-14, 0, 3), Vector3(15, 0, -14), Vector3(-19, 0, -15), Vector3(19, 0, 6), Vector3(-19, 0, 6), Vector3(19, 0, -16), Vector3(3, 0, -20), Vector3(-3, 0, 11), Vector3(26, 0, -5), Vector3(-26, 0, -5)],
 		"sports": [Vector3(-40, 0, 58), Vector3(-58, 0, 66), Vector3(-66, 0, 55), Vector3(-35, 0, 72), Vector3(-52, 0, 48), Vector3(-70, 0, 70), Vector3(-28, 0, 50), Vector3(-62, 0, 76)],
 		"gate": [Vector3(-6, 0, 94), Vector3(6, 0, 93), Vector3(-12, 0, 96), Vector3(3, 0, 88)],
-		"lectureb": _grid_spots(Vector3(-104, 0, -71), 6, 3, 4.4, 3.2),
-		"lecturec": _grid_spots(Vector3(104, 0, -71), 6, 3, 4.4, 3.2),
+		# Phase 4: B/C spots stay on the flat front row (z -76) + the
+		# lowest tier seats (y 0.35, see seats below) — never inside a riser.
+		"lectureb": _grid_spots(Vector3(-104, 0, -76), 6, 1, 4.4, 3.2),
+		"lecturec": _grid_spots(Vector3(104, 0, -76), 6, 1, 4.4, 3.2),
 		"admin": _grid_spots(Vector3(-104, 0, -34), 4, 3, 4.2, 3.2),
 		"shops": [Vector3(19.5, 0, 74), Vector3(19.5, 0, 80), Vector3(19.5, 0, 86), Vector3(19.5, 0, 92), Vector3(21.5, 0, 77), Vector3(21.5, 0, 83), Vector3(21.5, 0, 89), Vector3(17.5, 0, 95)],
-		"garden": [Vector3(98, 0, 44), Vector3(106, 0, 52), Vector3(112, 0, 46), Vector3(100, 0, 58), Vector3(116, 0, 54), Vector3(94, 0, 36), Vector3(108, 0, 36), Vector3(118, 0, 64), Vector3(96, 0, 66), Vector3(98, 0, 78), Vector3(104, 0, 80), Vector3(92, 0, 82)]
+		"garden": [Vector3(98, 0, 44), Vector3(106, 0, 52), Vector3(112, 0, 46), Vector3(100, 0, 58), Vector3(116, 0, 54), Vector3(94, 0, 36), Vector3(108, 0, 36), Vector3(118, 0, 64), Vector3(96, 0, 66), Vector3(98, 0, 78), Vector3(104, 0, 80), Vector3(92, 0, 82)],
+		# Phase 4: city spots stay OUTSIDE the shop buildings (street,
+		# shop fronts, park) so no path ever crosses a shop wall.
+		"city": [Vector3(0, 0, 136), Vector3(-8, 0, 136), Vector3(8, 0, 136), Vector3(-16, 0, 136), Vector3(16, 0, 136), Vector3(-14, 0, 134), Vector3(14, 0, 134), Vector3(0, 0, 160), Vector3(-6, 0, 160), Vector3(6, 0, 163), Vector3(-20, 0, 140), Vector3(20, 0, 140)]
 	}
 	for s in seats["quad"]:
 		spots["quad"].append(s["pos"])
 	for s in seats["garden"]:
 		spots["garden"].append(s["pos"])
+	# Phase 4: lowest-tier seats in Blocks B & C (platform top y 0.35,
+	# facing the north board, yaw = PI). _pick_spot matches these exactly
+	# and marks the NPC seated; NPC._process snaps y to the seat height.
+	for bc in ["lectureb", "lecturec"]:
+		var bx := -104.0 if bc == "lectureb" else 104.0
+		seats[bc] = []
+		for sx in [-12.0, -4.0, 4.0, 12.0]:
+			var spos := Vector3(bx + sx, 0.35, -73.5)
+			seats[bc].append({"pos": spos, "yaw": PI})
+			spots[bc].append(spos)
 
 	# --- waypoint graph (avenues + entrances + interiors)
 	var nodes := {
@@ -573,7 +592,9 @@ static func build(parent: Node3D) -> Dictionary:
 		"south_w": Vector3(-24, 0, 52), "sports_in": Vector3(-38, 0, 58),
 		"nw1": Vector3(-52, 0, -24), "nw2": Vector3(-104, 0, -24), "lecb_front": Vector3(-104, 0, -59), "lecb_in": Vector3(-104, 0, -67), "admin_in": Vector3(-104, 0, -30),
 		"ne1": Vector3(86, 0, -24), "lecc_front": Vector3(104, 0, -59), "lecc_in": Vector3(104, 0, -67),
-		"shops": Vector3(17, 0, 84), "gard_mid": Vector3(84, 0, 52), "garden_in": Vector3(100, 0, 50)
+		"shops": Vector3(17, 0, 84), "gard_mid": Vector3(84, 0, 52), "garden_in": Vector3(100, 0, 50),
+		# Phase 4: city route — gate gap -> road -> bus stop -> MG Road street.
+		"city_road": Vector3(0, 0, 108), "city_bus": Vector3(3.5, 0, 120), "city_center": Vector3(0, 0, 136), "city_park": Vector3(0, 0, 160)
 	}
 	var edges := [
 		["gate", "ave_s1"], ["ave_s1", "ave_s2"], ["ave_s2", "quad_s"], ["quad_s", "quad_c"],
@@ -587,7 +608,8 @@ static func build(parent: Node3D) -> Dictionary:
 		["quad_n", "nw1"], ["nw1", "nw2"], ["nw2", "lecb_front"], ["lecb_front", "lecb_in"], ["nw2", "admin_in"],
 		["lib_path", "ne1"], ["ne1", "lecc_front"], ["lecc_front", "lecc_in"],
 		["gate", "shops"], ["ave_s1", "shops"],
-		["uni_path", "gard_mid"], ["gard_mid", "garden_in"]
+		["uni_path", "gard_mid"], ["gard_mid", "garden_in"],
+		["gate", "city_road"], ["city_road", "city_bus"], ["city_bus", "city_center"], ["city_center", "city_park"]
 	]
 	var astar := AStar3D.new()
 	var ids: Dictionary = {}
@@ -599,7 +621,7 @@ static func build(parent: Node3D) -> Dictionary:
 	for e in edges:
 		astar.connect_points(ids[e[0]], ids[e[1]], true)
 	var zone_entry := {"dorm": "dorm_in", "lecture": "lec_in", "library": "lib_in", "foodcourt": "food_in", "union": "uni_in", "quad": "quad_c", "sports": "sports_in", "gate": "gate",
-		"lectureb": "lecb_in", "lecturec": "lecc_in", "admin": "admin_in", "shops": "shops", "garden": "garden_in"}
+		"lectureb": "lecb_in", "lecturec": "lecc_in", "admin": "admin_in", "shops": "shops", "garden": "garden_in", "city": "city_center"}
 
 	return {
 		"astar": astar, "ids": ids, "nodes": nodes, "zone_entry": zone_entry,
@@ -607,7 +629,8 @@ static func build(parent: Node3D) -> Dictionary:
 		"counter_pos": Vector3(74.5, 0, 18), "counter_front": Vector3(72.6, 0, 18),
 		"chai_pos": Vector3(15, 0, 24), "chai_front": Vector3(15, 0, 26.2),
 		"librarian_pos": Vector3(58, 0, -63.5), "canteen_staff_pos": Vector3(76.2, 0, 18),
-		"chai_staff_pos": Vector3(15, 0, 22.6), "shop_staff_pos": Vector3(21.0, 0, 82.5)
+		"chai_staff_pos": Vector3(15, 0, 22.6), "shop_staff_pos": Vector3(21.0, 0, 82.5),
+		"city_shopkeeper_pos": Vector3(-14, 0, 133.5)
 	}
 
 static func _grid_spots(center: Vector3, cols: int, rows: int, dx: float, dz: float) -> Array:
@@ -618,18 +641,49 @@ static func _grid_spots(center: Vector3, cols: int, rows: int, dx: float, dz: fl
 	return out
 
 static func _lecture_interior_at(center: Vector3, title: String) -> void:
+	# Phase 4: tiered lecture seating. Building depth is 18 m (center z
+	# -9 .. +9): board on the north wall, flat front desks, then the
+	# floor rises southward in two steps (0.35 / 0.70 m risers) with a
+	# desk row on each tier. A partition near the back wall (two door
+	# gaps + a divider) creates two small seminar rooms; NPC spots stay
+	# in the flat front + lowest tier, so nobody is placed inside a riser.
 	var wood_m := TexGen.mat_tex(TexGen.tex_wood(), Color.WHITE, Vector2(1.4, 0.8))
-	for r in range(3):
-		for c in range(6):
-			var p := center + Vector3(-12.0 + float(c) * 4.4, 0.42, -2.5 + float(r) * 3.2)
-			_box(wood_m, p, Vector3(1.7, 0.84, 0.8), true)
+	var step_m := TexGen.mat_tex(TexGen.tex_concrete(), Color(0.92, 0.90, 0.86), Vector2(10, 1))
+	# tier platforms (rise away from the north board)
+	_box(step_m, center + Vector3(0, 0.175, -1.5), Vector3(30, 0.35, 3.0), true)
+	_box(step_m, center + Vector3(0, 0.35, 1.5), Vector3(30, 0.70, 3.0), true)
+	# desk rows: flat front row + one row per tier
+	for c in range(6):
+		var dx := -12.0 + float(c) * 4.4
+		_box(wood_m, center + Vector3(dx, 0.42, -4.0), Vector3(1.7, 0.84, 0.8), true)
+		_box(wood_m, center + Vector3(dx, 0.77, -1.5), Vector3(1.7, 0.84, 0.8), true)
+		_box(wood_m, center + Vector3(dx, 1.12, 1.5), Vector3(1.7, 0.84, 0.8), true)
+	# lecturer podium + board
+	_box(wood_m, center + Vector3(0, 0.55, -7.0), Vector3(1.6, 1.1, 0.9), true)
 	_box(TexGen.mat_color(Color(0.12, 0.25, 0.18), 0.6), center + Vector3(0, 2.4, -8.55), Vector3(12, 2.6, 0.15), false)
 	_sign(title, center + Vector3(0, 3.2, -8.35), 64, Color(0.9, 1.0, 0.9))
+	# back partition (z = center + 4.0) with a door into each seminar room,
+	# plus the divider between the two rooms (z +4.0 .. +9.0).
+	_wall_run(step_m, center + Vector3(-15, 0, 4.0), center + Vector3(0, 0, 4.0), 3.0, 0.3, -7.5)
+	_wall_run(step_m, center + Vector3(0, 0, 4.0), center + Vector3(15, 0, 4.0), 3.0, 0.3, 7.5)
+	_wall_run(step_m, center + Vector3(0, 0, 4.0), center + Vector3(0, 0, 9.0), 3.0, 0.3)
+	_box(wood_m, center + Vector3(-7.5, 0.42, 6.5), Vector3(1.7, 0.84, 0.8), true)
+	_box(wood_m, center + Vector3(7.5, 0.42, 6.5), Vector3(1.7, 0.84, 0.8), true)
+	_sign("SEMINAR ROOMS", center + Vector3(0, 2.6, 3.8), 52, Color(1.0, 0.97, 0.85))
 
 static func _admin_interior() -> void:
 	var wood_m := TexGen.mat_tex(TexGen.tex_wood(), Color.WHITE, Vector2(1.4, 0.8))
 	var center := Vector3(-104, 0, -34)
-	# front counter + office desks + visitor chairs
+	# Phase 4: three service counters along the north wall (Fees, Exam
+	# Cell, Student Services) with queue chairs in front; the central
+	# floor stays clear for the existing NPC spot grid.
+	for i in range(3):
+		var cx := -8.4 + float(i) * 8.4
+		_box(wood_m, center + Vector3(cx, 0.55, -5.6), Vector3(5.2, 1.1, 0.9), true)
+		_sign(["FEES OFFICE", "EXAM CELL", "STUDENT SERVICES"][i], center + Vector3(cx, 2.2, -6.2), 54, Color(1.0, 0.97, 0.85))
+		for q in range(3):
+			_box(TexGen.mat_color(Color(0.30, 0.35, 0.55), 0.9), center + Vector3(cx - 1.6 + float(q) * 1.6, 0.30, -2.2), Vector3(0.55, 0.6, 0.55), true)
+	# front counter + office desks + visitor chairs (kept from Phase 1)
 	_box(wood_m, center + Vector3(0, 0.55, 3.4), Vector3(9.0, 1.1, 0.9), true)
 	for i in range(4):
 		_box(wood_m, center + Vector3(-8.4 + float(i) * 5.6, 0.42, -3.4), Vector3(1.9, 0.84, 0.9), true)
@@ -683,6 +737,14 @@ static func _build_interiors() -> void:
 		_box(TexGen.mat_color(Color(0.75, 0.78, 0.85), 0.9), Vector3(bx, 0.32, 12.4), Vector3(1.1, 0.5, 2.2), true)
 		_box(TexGen.mat_color(Color(0.95, 0.95, 0.95), 0.9), Vector3(bx, 0.62, 11.6), Vector3(1.05, 0.14, 0.6), false)
 		_box(wood_m, Vector3(bx, 1.0, 24.6), Vector3(1.4, 2.0, 0.6), true)
+	# Phase 4: the player's room corner (near bed 4, x -60.4): study desk,
+	# chair, rug base and a poster board. Bought décor (plant/lamp/rug/
+	# shelf) is placed around here by Main at runtime.
+	_box(wood_m, Vector3(-58.0, 0.42, 15.2), Vector3(1.8, 0.84, 0.9), true)
+	_box(TexGen.mat_color(Color(0.30, 0.35, 0.55), 0.9), Vector3(-58.0, 0.30, 16.4), Vector3(0.55, 0.6, 0.55), true)
+	_box(TexGen.mat_color(Color(0.55, 0.30, 0.35), 0.9), Vector3(-58.0, 0.06, 14.2), Vector3(2.4, 0.05, 1.8), false)
+	_box(wood_m, Vector3(-55.6, 1.1, 14.6), Vector3(0.12, 2.2, 1.6), true)
+	_sign("MY ROOM", Vector3(-55.5, 2.4, 14.6), 56, Color(1.0, 0.95, 0.8), -PI / 2.0)
 	# Student Union: stage + sofa blocks + notice pillars
 	_box(wood_m, Vector3(58, 0.3, 71.5), Vector3(12, 0.6, 4.4), true)
 	for sx in [50.0, 55.0, 61.0, 66.0]:
@@ -756,6 +818,78 @@ static func _build_chai_seating() -> void:
 			_cyl(TexGen.mat_tex(TexGen.tex_wood(), Color.WHITE, Vector2(0.4, 0.4)), tp + Vector3(sin(a) * 0.95, 0.24, cos(a) * 0.95), 0.19, 0.48, true)
 		i += 1
 
+static func _build_gym_pool() -> void:
+	# Gym shed east of the track + open-air pool beside it. Both sit in
+	# open ground (no overlap with the basketball court, track or avenue).
+	_building({"center": Vector3(-10, 0, 44), "w": 12, "d": 8, "h": 4.5, "door_side": "south", "name": "GYM", "wall_tex": TexGen.tex_concrete(), "tint": Color(0.95, 0.93, 0.88), "accent": Color(0.85, 0.35, 0.15)})
+	var dark_m := TexGen.mat_color(Color(0.20, 0.22, 0.26), 0.7)
+	var bench_m := TexGen.mat_tex(TexGen.tex_wood(), Color.WHITE, Vector2(1, 1))
+	for bx in [-14.0, -10.0, -6.0]:
+		_box(bench_m, Vector3(bx, 0.45, 43), Vector3(1.8, 0.9, 0.7), true)
+		_box(dark_m, Vector3(bx, 0.95, 43), Vector3(1.2, 0.25, 0.5), false)
+	_box(dark_m, Vector3(-10, 0.3, 46.5), Vector3(3.0, 0.6, 1.2), true)
+	_sign("GYM — Weights • Cardio • 6 AM – 10 PM", Vector3(-10, 3.0, 48.2), 52, Color(1.0, 0.95, 0.8), 0.0)
+	# Pool: rim + water + deck chairs (open-air, beside the gym).
+	_cyl(TexGen.mat_tex(TexGen.tex_concrete(), Color(0.88, 0.86, 0.82), Vector2(6, 1)), Vector3(12, 0.11, 41), 5.2, 0.22, false)
+	var water := CylinderMesh.new()
+	water.top_radius = 4.8
+	water.bottom_radius = 4.8
+	water.height = 0.05
+	water.radial_segments = 24
+	# NOTE: cylinder axis is Y; scale flattens it into a round pool.
+	_mi(water, TexGen.mat_tex(TexGen.tex_water(), Color(0.8, 0.92, 1.0), Vector2(4, 4), 0.3), Vector3(12, 0.235, 41), Vector3(2.1, 1.0, 1.35))
+	for cx in [-1.5, 1.5]:
+		_box(bench_m, Vector3(12 + cx * 3.4, 0.35, 41), Vector3(1.8, 0.7, 0.6), true)
+	_sign("CAMPUS POOL", Vector3(12, 1.8, 36.5), 56, Color(1, 1, 1), 0.0)
+
+static func _build_city() -> void:
+	# Phase 4 (Section 15.3): the first city district beyond the Main
+	# Gate — MG Road. Ground plane + road south through the gate gap,
+	# clothing store + café on the north side of the street, two
+	# apartment blocks, a park, and the Route 12 bus stop with a parked
+	# bus. All inside the "city" player-zone radius (center (0,140), r 24).
+	_ground_plane(TexGen.mat_tex(TexGen.tex_grass(), Color.WHITE, Vector2(24, 24)), Vector3(0, 0.015, 140), Vector2(64, 64))
+	_ground_plane(TexGen.mat_tex(TexGen.tex_asphalt(), Color.WHITE, Vector2(4, 12)), Vector3(0, 0.02, 108), Vector2(10, 12))
+	_ground_plane(TexGen.mat_tex(TexGen.tex_asphalt(), Color.WHITE, Vector2(22, 5)), Vector3(0, 0.02, 136), Vector2(56, 10))
+	_ground_plane(TexGen.mat_tex(TexGen.tex_paving(), Color.WHITE, Vector2(22, 3)), Vector3(0, 0.021, 130), Vector2(56, 6))
+	var paint_m := TexGen.mat_color(Color(0.94, 0.94, 0.92), 0.75)
+	for x in range(-24, 26, 7):
+		_box(paint_m, Vector3(float(x), 0.035, 136), Vector3(3.0, 0.012, 0.18), false)
+	_building({"center": Vector3(-14, 0, 128), "w": 12, "d": 8, "h": 5, "door_side": "south", "name": "STYLE STUDIO — Clothing", "wall_tex": TexGen.tex_concrete(), "tint": Color(1.0, 0.92, 0.95), "accent": Color(0.75, 0.20, 0.45)})
+	_building({"center": Vector3(14, 0, 128), "w": 12, "d": 8, "h": 5, "door_side": "south", "name": "CAFÉ STREET", "wall_tex": TexGen.tex_brick(), "tint": Color(1.02, 0.95, 0.82), "accent": Color(0.55, 0.30, 0.10)})
+	_building({"center": Vector3(-14, 0, 150), "w": 12, "d": 10, "h": 9, "door_side": "north", "name": "CITY APARTMENTS", "wall_tex": TexGen.tex_concrete(), "tint": Color(0.95, 0.93, 0.88), "accent": Color(0.30, 0.40, 0.55)})
+	_building({"center": Vector3(14, 0, 150), "w": 12, "d": 10, "h": 9, "door_side": "north", "name": "CITY APARTMENTS", "wall_tex": TexGen.tex_brick(), "tint": Color(0.92, 0.90, 0.95), "accent": Color(0.45, 0.35, 0.50)})
+	# café terrace tables in front of Café Street
+	var cafe_wood := TexGen.mat_tex(TexGen.tex_wood(), Color.WHITE, Vector2(1, 1))
+	for tx in [10.0, 17.0]:
+		_cyl(TexGen.mat_color(Color(0.92, 0.90, 0.86), 0.4), Vector3(tx, 0.72, 134.5), 0.55, 0.06, false)
+		_cyl(TexGen.mat_color(Color(0.30, 0.30, 0.33), 0.5), Vector3(tx, 0.36, 134.5), 0.06, 0.72, true)
+	# park: lawn strip, benches, trees, path (south end of the district)
+	_ground_plane(TexGen.mat_tex(TexGen.tex_grass(), Color(1.04, 1.0, 0.88), Vector2(14, 8)), Vector3(0, 0.016, 162), Vector2(44, 14))
+	_ground_plane(TexGen.mat_tex(TexGen.tex_paving(), Color.WHITE, Vector2(6, 2)), Vector3(0, 0.026, 160), Vector2(3, 14))
+	_bench(Vector3(-6, 0, 160), 0.2)
+	_bench(Vector3(6, 0, 163), -0.3)
+	_tree(Vector3(-14, 0, 164), 1.0, 0)
+	_tree(Vector3(14, 0, 158), 1.1, 1)
+	_tree(Vector3(0, 0, 167), 0.95, 2)
+	_sign("MG ROAD PARK", Vector3(0, 2.2, 155.5), 60, Color(1, 1, 1), PI)
+	# city street furniture + signs
+	for sp in [[Vector3(-20, 0, 132), Vector3(0, 0, 1)], [Vector3(20, 0, 140), Vector3(0, 0, -1)]]:
+		_street_pole(sp[0], sp[1])
+	_dustbin(Vector3(-22, 0, 134))
+	_dustbin(Vector3(22, 0, 138))
+	_signpost(Vector3(4, 0, 133), [["MG ROAD →", PI / 2.0], ["← CAMPUS GATE", -PI / 2.0], ["PARK ↓", 0.0]])
+	# Route 12 bus stop: small shelter (own sign — the campus shelter's
+	# sign text is reused nowhere here) + parked bus at the terminus.
+	var city_frame := TexGen.mat_color(Color(0.25, 0.27, 0.30), 0.4)
+	for px in [-2.6, 0.0, 2.6]:
+		_box(city_frame, Vector3(7 + px, 1.3, 119.2), Vector3(0.09, 2.6, 0.09), false)
+	_box(TexGen.mat_glass(), Vector3(7, 1.35, 119.2), Vector3(5.4, 1.9, 0.04), false)
+	_box(TexGen.mat_color(Color(0.55, 0.57, 0.60), 0.35), Vector3(7, 2.72, 120), Vector3(5.8, 0.12, 2.0), false)
+	_box(TexGen.mat_tex(TexGen.tex_wood(), Color.WHITE, Vector2(2, 0.4)), Vector3(7, 0.55, 119.55), Vector3(4.6, 0.09, 0.4), false)
+	_build_bus(Vector3(0, 0, 119), PI / 2.0)
+	_sign("CITY BUS — Route 12 • MG Road Terminus", Vector3(7, 3.4, 118.5), 56, Color(1, 1, 1), 0.0)
+
 static func _build_bus_shelter(pos: Vector3) -> void:
 	var g := Node3D.new()
 	g.position = pos
@@ -789,6 +923,12 @@ static func _build_shops() -> void:
 		# striped awning over the door
 		var awn := _box(TexGen.mat_color(d["accent"], 0.9), d["center"] + Vector3(-3.6, 2.95, 0), Vector3(1.7, 0.07, 5.2), false)
 		awn.rotation.z = 0.28
+		# Phase 4: shop interiors — counter + shelves along the east wall
+		# (NPC plaza spots stay outside, so no spot ever lands in furniture).
+		var shop_wood := TexGen.mat_tex(TexGen.tex_wood(), Color.WHITE, Vector2(1, 1))
+		_box(shop_wood, d["center"] + Vector3(2.2, 0.55, 0), Vector3(0.8, 1.1, 3.4), true)
+		_box(shop_wood, d["center"] + Vector3(2.3, 1.3, -1.8), Vector3(0.6, 1.4, 0.9), true)
+		_box(shop_wood, d["center"] + Vector3(2.3, 1.3, 1.8), Vector3(0.6, 1.4, 0.9), true)
 	# goods crates + a hand cart outside the shops
 	var crate_m := TexGen.mat_tex(TexGen.tex_wood(), Color(0.9, 0.8, 0.65), Vector2(1, 1))
 	_box(crate_m, Vector3(20.5, 0.35, 69.5), Vector3(0.7, 0.7, 0.7), true)
@@ -976,6 +1116,13 @@ static func _build_gardens(seats: Dictionary) -> void:
 	for sx in [89.5, 106.5]:
 		_box(TexGen.mat_color(Color(0.75, 0.3, 0.18), 0.8), Vector3(sx, 1.5, 85), Vector3(0.35, 3.0, 0.35), true)
 	_sign("FEST '26 — auditions open!", Vector3(98, 2.2, 82.1), 54, Color(1.0, 0.9, 0.6), PI)
+	# Phase 4: lakeside wooden deck + garden kiosk (chai/snacks terrace).
+	var deck_m := TexGen.mat_tex(TexGen.tex_wood(), Color.WHITE, Vector2(6, 3))
+	_box(deck_m, Vector3(110, 0.12, 29.5), Vector3(10, 0.24, 3.2), true)
+	_box(deck_m, Vector3(124, 0.55, 44), Vector3(2.6, 1.1, 1.4), true)
+	_sign("LAKE KIOSK — Chai ₹15 • Samosa ₹20", Vector3(124, 2.4, 44), 48, Color(1.0, 0.9, 0.6), 0.0)
+	_bench(Vector3(114, 0, 27.5), 0.3)
+	_bench(Vector3(106, 0, 30.5), 2.6)
 
 static func _build_sports() -> void:
 	var pitch_m := TexGen.mat_tex(TexGen.tex_grass(), Color(0.85, 1.05, 0.85), Vector2(40, 24))

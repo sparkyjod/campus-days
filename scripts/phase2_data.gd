@@ -141,11 +141,15 @@ static func calendar_events() -> Array:
 		{"day": 15, "title": "Fest Auditions", "desc": "Cultural Fest auditions at the amphitheatre. Perform, volunteer, or watch."},
 		{"day": 19, "title": "Assignment 3 Due", "desc": "Presentation Prep due. Rehearse once in the library for full marks."},
 		{"day": 22, "title": "Sports Trials", "desc": "Football, cricket and basketball trials at the Sports Complex."},
-		{"day": 28, "title": "Mid-Semester Exams (Week 4 of play)", "desc": "Exams begin. Your GPA so far is your preparation — revise, sleep, breathe."},
+		{"day": 28, "title": "Unit Tests (Week 4)", "desc": "Unit tests in class. Your GPA so far is your preparation — revise, sleep, breathe."},
 		{"day": 36, "title": "Cultural Fest Week", "desc": "The big one: performances, stalls, competitions across the whole campus."},
 		{"day": 50, "title": "Diwali Break", "desc": "Campus glows, families visit, the fest committee rests. Enjoy it."},
-		{"day": 56, "title": "Final Exams (Week 8 of play)", "desc": "Finals. Everything you attended, studied and submitted comes together."},
-		{"day": 70, "title": "Results Day", "desc": "Grades published at the Admin Block. Whatever they say, you lived it."}
+		{"day": 52, "title": "Mid-Semester Exams Begin", "desc": "Mid-semester papers Days 52-54 in your lecture block (09:00-16:00). Results Day 57."},
+		{"day": 57, "title": "Mid-Semester Results", "desc": "Mid-semester results published. Your average nudges your GPA."},
+		{"day": 64, "title": "Sports Meet Week", "desc": "Sports Meet Week Days 64-70: sports sessions count double XP, 3+ sessions earns the meet prize."},
+		{"day": 70, "title": "Results Day (Semester Story)", "desc": "Grades published at the Admin Block. Whatever they say, you lived it."},
+		{"day": 78, "title": "Final Exams Begin", "desc": "Final papers Days 78-82 in your lecture block (09:00-16:00). Final results Day 85."},
+		{"day": 85, "title": "Final Results Day", "desc": "Final results published — and the semester story closes."}
 	]
 
 # ---------------- lecture Q&A ----------------

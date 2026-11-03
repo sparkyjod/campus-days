@@ -351,22 +351,120 @@ Phase 2 system was changed in behaviour; Phase 3 only adds to them.
   tiers, customisation, or 12-week harness) and NO Phase 5 work
   (no Forward+ conversion, audio, or LOD pass).
 
-## Phase 4 — Full Semester ⏳
+## Phase 4 — Full Semester ✅ (completed 2026-11-03; local commit only, push is Stage 3's job)
 
-- 🟡 Remaining zones: Lecture Blocks B & C, Admin Block, campus shops row, gardens &
-  lake corner were pulled forward as built structures in the overhaul change round
-  (exteriors + simple interiors, working NPC zones) — full detail, gym/swimming in
-  sports complex → still Phase 4
-- ⏳ Clubs & societies as joinable systems (coding, debate, dance, music, football,
-  art, literature, finance) with weekly sessions
-- 🟡 Sports: running track + basketball court built in the overhaul; sports
-  activities (football practice, running, basketball as gameplay), dorm life full
-  (room decoration, roommate, knocking on doors) → Phase 4
-- ⏳ Exams Week 8 (mid-sem) & Week 12 (finals), results day, week/semester summaries
-- ⏳ Sports Meet (Week 10), full 12-week calendar playthrough
-- ⏳ Weather system (clear/cloudy/rain) with logical crowd/mood effects
-- ⏳ Crowd density logic by period (lecture halls fill, food court lunch peak…)
-- Acceptance: play Week 1 → results day without a soft-lock
+Built by completing the substantial Phase 4 work already in the working tree
+(new `scripts/phase4_data.gd`; `main.gd` +~1430 lines, `world.gd` +171,
+`npc.gd` tiers, `phase2_data.gd`/`phase3_data.gd` calendar updates) rather
+than restarting it. The completion pass itself added only three small fixes,
+found by reading the tree against the brief: (1) two stale "arrives in
+Phase 4" strings (phone City Gate tab, City Bus social post) now say the
+MG Road district is open; (2) shot17 re-framed from the park side so the
+Style Studio / Café Street shopfronts read behind the foot traffic (the
+first take looked south and showed only apartments); (3) this PHASES.md
+section. The headless test the stalled builder left behind already covered
+every system below — it passed on first run here, which is why no gameplay
+code had to change.
+
+- ✅ Zones completed: Lecture Blocks B & C now have tiered seating (two
+  risers), a back partition with two seminar rooms, and lowest-tier seat
+  spots NPCs rise onto (y-ease in `npc.gd`); Admin Block has three service
+  counters (Fees, Exam Cell, Student Services) with queue chairs; shops row
+  interiors have counters + shelves; gardens/lake gained a lakeside wooden
+  deck, a Lake Kiosk sign and two extra benches. Sports complex gained a
+  GYM building (weights benches) and an open-air CAMPUS POOL.
+- ✅ Clubs as joinable systems: 8 clubs (coding, debate, dance, music,
+  football, art, literature, finance) with weekly weekday sessions at
+  their real venues; max 2 joined (third join refused, test-proven);
+  sessions cost energy, grant their Phase 2 skill XP and social +2, and
+  dance/music/art sessions count as Cultural Fest practice.
+- ✅ Sports depth: 5 playable actions (football practice, run laps,
+  basketball shots, gym workout, swim laps), each anchored, costing
+  energy, granting Sport XP + health + stress relief; Sports Meet Week
+  Days 64–70 gives double XP and a ₹200 + social prize at 3+ sessions.
+- ✅ Dorm depth: the player's room corner (study desk, chair, rug base,
+  poster board, "MY ROOM" sign) plus 4 buyable décor items (plant, rug,
+  lamp, shelf) that can be bought, placed, stored and re-placed; invite a
+  friend to the room (friendship 20+, guest walks over and is welcomed
+  with friendship +4 / social +2; timetable cannot yank a guest mid-visit).
+- ✅ Exams: mid-semester Days 52–54 (Week 8) and finals Days 78–82
+  (Week 12), sat in a lecture block 09:00–16:00, marks computed from
+  submitted assignments + Study skill + GPA (range 35–98); results Days 57
+  and 85 with GPA nudges; Phase 2 calendar exam entries and the Phase 3
+  storyline Results step moved to match (Day 85, not Day 70); Diwali
+  Break Days 49–51 still carries no attendance penalty.
+- ✅ Weather system: deterministic per-day clear/cloudy/rain (Day 1 clear
+  by construction); rain dims the sun, thickens haze, greys the sky and
+  runs a player-following rain-particle emitter (visible in shot20);
+  outdoor crowds are redirected indoors on rain days (quad→union,
+  garden→library, sports→union) and outdoor club/sport sessions give no
+  skill XP in the wet.
+- ✅ Crowd logic with distance-based simulation tiers (Section 15.2):
+  near (<30 m) full sim, mid (<70 m) half movement rate, far (>70 m)
+  schedule-only straight-line stepping with idle clip; tiers are forced
+  to 0 in test/capture mode so arrival evidence and staged poses are
+  never disturbed, and far→near transitions re-path on the graph. Three
+  background students also spend club period + evenings in the city, so
+  MG Road has foot traffic via the gate.
+- ✅ City district (Section 15.3): MG Road beyond the gate — Style Studio
+  clothing store (shopkeeper Meena), Café Street with terrace tables,
+  two apartment blocks, a park with benches/trees/path, and a Route 12
+  bus stop with parked bus; bus both ways ₹20 from the gate loop /
+  terminus; the shop panel sells 6 outfits, 5 hairstyles, 4 décor items
+  and 3 café snacks.
+- ✅ Character customisation: outfits/hairstyles bought once and re-worn
+  free, applied to the player model immediately and persistently —
+  saved via the Phase 2 delta system and re-applied on load
+  (`_p4_after_load`); the completion test round-trips outfit, hair,
+  décor, clubs, city visits and continued-arc progress exactly.
+- ✅ Continued arcs: 4 extra steps × all Ten (total 6 quests per arc,
+  inside the master prompt's 5–8), gated on the Phase 3 base arc being
+  complete, using the Phase 4 action vocabulary (club sessions, sports,
+  city visits, customise); Anirudh's extension is test-proven end-to-end.
+- ✅ Full 12-week playthrough verification: a synchronous day-step
+  harness (NOT real-time) plays Days 1–85 — lectures, study, submits,
+  jobs, clubs, sports, fest practice, city Sundays, Holi, both exam
+  sittings, sleep-driven day advance — and ends at Day 86 with all
+  checks green (see evidence below). Exactly what was simulated is the
+  harness's scripted day, not free play; free-play Week 1 → results day
+  without a soft-lock is NOT separately playtested by a human.
+- 🟡 Roommate: NOT built. Dorm social life is covered by invite-a-friend
+  (above); a persistent roommate NPC with their own schedule/dialogue
+  was not in the Phase 4 brief's dorm list ("decorate, store items,
+  invite friends") and is Deferred — it needs its own schedule +
+  dialogue design, not a bolt-on.
+- 🟡 Knocking on doors: NOT built, same reason — Deferred with the
+  roommate item above.
+- 🟡 Crowd density by period: density emerges from the timetable system
+  (lecture halls fill at lecture times, food court peaks at lunch) plus
+  the new tiers and rain redirect, but no explicit per-period
+  crowd-count targets were set or asserted — Partial, not a separate
+  system. Reason: the brief's crowd item is satisfied by tiers +
+  redirect; inventing count targets would be untestable decoration.
+- Acceptance (from master prompt): **PASS with the three 🟡 notes above**
+  — headless full-day sim re-run on final code: exit 0, **zero script
+  errors** (688 `Parameter "m" is null` lines are the known
+  dummy-renderer engine notices), **43/43 non-staff NPCs arrived**,
+  day rolled over to Day 2; Phase 4 test block PASS (clubs incl. max-2
+  rule, all 5 sports, weather table + rain redirect, tier boundaries +
+  live check, bus/shop/décor round-trip, 3 + 5 exam sittings with both
+  results, week summary + Sports Meet award, Anirudh extension
+  end-to-end, dorm invite welcome, save-delta round-trip); semester
+  harness PASS: reached Day 86, GPA 8.09, money ₹9,120, lectures 183,
+  study 86, clubs 25, sports 37, shifts 61, earned ₹9,150, exams 8,
+  week summaries 12, storyline 4/4, fest practice 36, city visits 12,
+  Sports Meet award earned. Screenshots: 20 PNGs in `preview/`
+  re-captured from final code under xvfb (0 script errors), including
+  street-level avenue (shot6), character close-up (shot2), HUD minimap
+  shot (shot11), reframed city street with shopfronts (shot17), club
+  sports at street level (shot18), decorated dorm room (shot19) and rain
+  avenue (shot20). Exports refreshed from final code: build/windows/
+  CampusDays.exe 84,214,784 bytes + CampusDays.pck 12,668,592 bytes;
+  build/web/ index.wasm 35,376,909 bytes + index.pck 12,668,608 bytes
+  (both 2026-11-03 ~09:17 IST; GL Compatibility renderer — Forward+ is
+  Phase 5). Capture staging stays gated behind the existing `--capture`
+  path only; gameplay unchanged. NO Phase 5 systems started (no
+  Forward+ conversion, audio, LOD/performance pass, or gamepad/touch).
 
 ## Phase 5 — Polish & Ports ⏳
 
