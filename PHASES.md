@@ -250,19 +250,106 @@ it) and fixed, not papered over:
   gameplay unchanged. NO Phase 3 systems started (no arcs, favours,
   gossip engine, festivals, romance, social feed, or city-gate menu).
 
-## Phase 3 — Stories ⏳
+## Phase 3 — Stories ✅ (completed 2026-11-03; local commit only, push is Stage 3's job)
 
-- ⏳ One story arc per main character (5–8 quests each; 2 quests each to start)
-- ⏳ Main semester storyline (orientation → fest → exams → results)
-- ⏳ Small favours system (deliver notes, lost items, cover a shift)
-- ⏳ Group events (kickabout, art jam, study circle, science demo, dance break)
-- ⏳ Invitations both ways (player↔NPC) with calendar plans kept/broken + consequences
-- ⏳ Consequences/gossip engine (reputation effects of public behaviour)
-- ⏳ Festivals in calendar: Diwali break, Holi event; Cultural Fest (Week 6) with
-  Indian music/dance performances depending on club practice
-- ⏳ Optional romance track (choices-gated) at high friendship where it fits
-- ⏳ City-gate menu (market, cinema, bookstore — real costs/effects)
-- Acceptance: finish one character arc end-to-end with no dead ends
+New `scripts/phase3_data.gd` (arcs, storyline, favours, group events,
+festivals, teacher arcs, city trips, social templates) + a Phase 3 engine
+section in `scripts/main.gd`, wired into existing hooks (talk, lecture,
+study, job, chai, office hours, day advance, phone, save deltas). No
+Phase 2 system was changed in behaviour; Phase 3 only adds to them.
+
+- ✅ One story arc per main character: all Ten have a 2-step arc in
+  `Phase3Data.arcs()` (Anirudh "Ship It", Zannat "Moot Point", Shreya
+  "First-Aid Friends", Chirag "Stall Hustle", Jatin "Match Day", Shadow
+  "Lake Canvas", Gulshan "Poetry Night", Yumi "Dance Piece", Diya "Stage
+  Design", Aarya "Budget Fest"). Steps advance only in order, never by
+  skipping the talk step; rewards are money/friendship/social/GPA and are
+  shown in the dialogue panel. (Master prompt allows 5–8 quests per arc;
+  the remaining steps are Phase 4's "remaining arcs" work — see 🟡 below.)
+- ✅ Main semester storyline: 4 steps (Orientation: talk to a teacher →
+  Fest week: attend a group event → Exams prep: study → Results Day at
+  Day 70) tracked on the phone Stories tab; Results stays locked until
+  Day 70 by design, not by a missing feature.
+- ✅ Small favours system: dialogue "Favour" button offers one favour per
+  character (deliver a note / find a lost item / cover a shift, rotating
+  by character + day); completing it through the matching real action
+  pays ₹30–60 + friendship; leaving it 2 days breaks it (friendship −3
+  + gossip post).
+- ✅ Group events: weekly Kickabout (Mon, sports), Art Jam (Tue, gardens),
+  Study Circle (Wed, library), Science Demo (Thu, Lecture A), Dance Break
+  (Fri, quad), Open Mic (Sat, union) — joined via the Stories tab
+  "Check in here" button while at the venue in the event window.
+  Art Jam / Dance Break / Open Mic count as fest practice.
+- ✅ Invitations both ways: player invites from any main's dialogue panel
+  (needs friendship 20+; kept by talking to them on the due day);
+  NPCs invite the player every 3rd day by phone message. Broken plans
+  cost friendship −4, social −3 and post a gossip item.
+- ✅ Consequences/gossip engine: social stat is the reputation meter —
+  broken plans, broken favours and gossip events move it, and every
+  effect lands in the Social feed with its cause stated. It builds on
+  the Phase 2 event-reactive gap (professor remarks) without touching
+  dialogue/friendship mechanics.
+- ✅ Festivals in calendar: Cultural Fest Days 36–40 (opening message +
+  closing verdict from judges Dr. Kapoor + Prof. D'Souza, graded by
+  fest-practice sessions: ≥3 triumph, ≥1 warm, 0 quiet, with social
+  rewards to match), Diwali Break Days 49–51 (no lecture-attendance
+  penalty during the break — wired into `_advance_day`), Holi Day 63
+  (check in on the Quad/Gardens to celebrate, social +5).
+- ✅ Optional romance track (choices-gated): dialogue "Something more?"
+  button, available only at friendship 65+ AND after that character's
+  arc is complete, one partner at a time, tasteful feed post, never
+  forced — a refusal message explains exactly which gate is unmet.
+- ✅ Teacher arc involvement (Section 19.1): 3 teacher arcs — Prof.
+  Raghavan "Strict, Softening" (talk → lecture → office hours),
+  Dr. Kapoor "Sponsorship Desk" (talk → job), Prof. D'Souza "Fest
+  Judge" (talk → amphitheatre visit) — plus recommendation letters
+  from any teacher (dialogue button; needs GPA 7.5+ and friendship 40+,
+  one per teacher, delivered as a message + social +5). Fest judging is
+  the Cultural Fest verdict above.
+- ✅ City-gate menu (FLAVOUR/TEASER ONLY): phone "City Gate" tab with
+  Market ₹150 (+energy/+health), Cinema ₹200 (−stress/+social),
+  Bookstore ₹180 (+GPA/assignment) — one trip per day, only from the
+  Main Gate zone. No city district, shops, bus route or customisation
+  was built; those stay Phase 4.
+- ✅ In-game social media feed (Section 15.4): new phone "Social" tab,
+  fed by arc/favour/event/invitation/gossip/festival/romance/city
+  posts plus one ambient NPC post per day — distinct from the Phase 2
+  "Buzz" tab, which is untouched.
+- 🟡 Arc depth: arcs are 2 steps each, not the master prompt's eventual
+  5–8 quests — the remaining steps are Phase 4's "remaining arcs" item,
+  as the Phase 3 scope in the task brief ("2 quests each to start")
+  specifies. Reason: scope discipline, not a cut made mid-build.
+- 🟡 Festival performances are text verdicts + rewards, not staged
+  in-world dance/music performances with audio — audio and animation
+  mannerisms are Phase 5. The fest outcome still depends on real
+  practice attendance, which is the gameplay dependency the prompt
+  requires.
+- Acceptance (from master prompt): **PASS** — headless test completes
+  Anirudh's arc end-to-end (talk → Union visit) with no dead ends, and
+  the full Phase 3 test block passes (see evidence below).
+- Acceptance evidence: headless full-day sim re-run on final code:
+  exit 0, **zero script errors** (565 `Parameter "m" is null` lines are
+  the known dummy-renderer engine notices), **43/43 non-staff NPCs
+  arrived**, day rolled over to Day 2; Phase 3 test block PASS:
+  Anirudh arc start→finish, favour completed via its own action,
+  invitation kept via talk + broken invitation social −3, gossip
+  delta −2, storyline 3/4 with Results locked until Day 70, romance
+  refused before arc completion then accepted after (Aarya, friendship
+  80), bookstore trip exactly ₹180, fest practice incremented, 18
+  social-feed posts generated. One genuine bug found by the test and
+  fixed (visit-step matching ignored the zone encoded in the action);
+  re-run green. Screenshots: 16 PNGs in `preview/` re-captured from
+  final code at 13:00, including street-level avenue (shot6),
+  character close-up (shot2), phone Social feed (shot13), phone
+  Stories tab (shot14), quad group event at street level (shot15),
+  and arc dialogue with the Story button (shot16). Exports refreshed
+  from final code (sizes/timestamps in the delivery report; GL
+  Compatibility renderer — Forward+ is Phase 5). Capture staging stays
+  gated behind the existing `--capture` path only; gameplay unchanged.
+  NO Phase 4 systems started (no clubs-as-systems, sports gameplay,
+  dorm decoration, exams as playable systems, weather, simulation
+  tiers, customisation, or 12-week harness) and NO Phase 5 work
+  (no Forward+ conversion, audio, or LOD pass).
 
 ## Phase 4 — Full Semester ⏳
 

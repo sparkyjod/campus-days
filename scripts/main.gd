@@ -57,6 +57,24 @@ var _messages: Array = [] # {"day": int, "from": String, "text": String}
 var _buzz: Array = [] # {"day": int, "text": String}
 var _quests: Array = []
 var _quest_index: int = 0
+# ---------------- Phase 3 state ----------------
+var _p3_arc_progress: Dictionary = {} # name -> steps completed (mains)
+var _p3_arc_done: Dictionary = {} # name -> bool
+var _p3_teacher_progress: Dictionary = {} # teacher name -> steps completed
+var _p3_teacher_done: Dictionary = {}
+var _p3_story_idx: int = 0 # index into Phase3Data.storyline()
+var _p3_favours: Array = [] # active: {giver,title,desc,action,target,day_offered,money,friend,social}
+var _p3_favours_done: int = 0
+var _p3_invitations: Array = [] # {with,kind,zone,day_due,from,kept}
+var _p3_social_posts: Array = [] # {day,author,text} newest appended last
+var _p3_gossip_log: Array = [] # {day,text,delta}
+var _p3_events_attended: Array = [] # "%d_%s" day_title keys
+var _fest_practice: int = 0
+var _p3_holi_done: bool = false
+var _p3_fest_result: String = ""
+var _romance_partner: String = ""
+var _teacher_letters: Array = []
+var _city_trip_day: int = -1
 var _quest_marker: MeshInstance3D = null
 var _mission_timer: float = 0.0
 var _npc_msg_timer: float = 45.0
@@ -96,6 +114,11 @@ var _phone_panel: PanelContainer
 var _phone_text: RichTextLabel
 var _phone_tab: String = "Messages"
 var _phone_job_row: HBoxContainer
+var _phone_city_row: HBoxContainer
+var _phone_action_row: HBoxContainer
+var _dlg_btns3: HBoxContainer
+var _dlg_romance_btn: Button
+var _dlg_letter_btn: Button
 var _save_panel: PanelContainer
 var _create_panel: PanelContainer
 var _create_name: LineEdit
@@ -504,7 +527,8 @@ func _finish_test() -> void:
 	for n in _mains:
 		print("[TEST_MAIN] ", (n as NPC).data["name"], " zone=", (n as NPC).target_zone)
 	var p2_ok := _run_phase2_tests()
-	get_tree().quit(0 if p2_ok else 1)
+	var p3_ok := _run_phase3_tests()
+	get_tree().quit(0 if (p2_ok and p3_ok) else 1)
 
 func _run_phase2_tests() -> bool:
 	# Phase 2 headless evidence: teachers present, dialogue sampling
@@ -748,6 +772,7 @@ func _buy_chai() -> void:
 		if money >= 15:
 			money -= 15
 			energy = minf(100.0, energy + 8.0)
+			_p3_on_action("chai")
 			_show_toast("Kadak masala chai! −₹15, +energy. Ramesh winks: 'Exam season fuel, ready.'")
 		else:
 			_show_toast("₹15 needed for chai. Ramesh would give credit, but the stall ledger says no.")
@@ -793,9 +818,19 @@ func _open_dialogue(npc: NPC) -> void:
 		_dlg_text.text = "%s\n\n%s" % [npc.data.get("personality", ""), _pick_chat_line(npc)]
 	else:
 		_dlg_text.text = str(npc.data.get("greeting", "Hello!"))
+	if _dlg_btns3 != null:
+		_dlg_btns3.visible = npc.is_main or npc.is_teacher
+		if _dlg_romance_btn != null:
+			_dlg_romance_btn.visible = npc.is_main
+		if _dlg_letter_btn != null:
+			_dlg_letter_btn.visible = npc.is_teacher
 	_update_dlg_friend()
 	if npc.is_teacher:
 		_complete_quest_if("meet_teacher")
+	if not _capture_mode and (npc.is_main or npc.is_teacher):
+		var p3note := _p3_on_talk(npc)
+		if p3note != "":
+			_dlg_text.text += "\n\n" + p3note
 
 func _pick_chat_line(npc: NPC) -> String:
 	# Phase 2: route mains + teachers through the Dialogue engine
@@ -840,6 +875,32 @@ func _dlg_choice(kind: String) -> void:
 		if cur != null and not bool(cur["submitted"]):
 			cur["progress"] = mini(100, int(cur["progress"]) + 20)
 		_dlg_text.text = "Office hours, then. %s\n\n(GPA +0.05, assignment +20 progress, friendship +3.)" % Dialogue.pick_line(npc, "career", npc.target_zone, game_minutes / 60.0, day)
+		_p3_on_action("office", str(npc.data["name"]))
+		_update_dlg_friend()
+		_refresh_hud()
+		return
+	if kind == "p3_story":
+		_dlg_text.text = _p3_story_text(npc)
+		_update_dlg_friend()
+		_refresh_hud()
+		return
+	if kind == "p3_favour":
+		_dlg_text.text = _p3_favour_text(npc)
+		_update_dlg_friend()
+		_refresh_hud()
+		return
+	if kind == "p3_invite":
+		_dlg_text.text = _p3_invite_text(npc)
+		_update_dlg_friend()
+		_refresh_hud()
+		return
+	if kind == "p3_romance":
+		_dlg_text.text = _p3_try_romance(npc)
+		_update_dlg_friend()
+		_refresh_hud()
+		return
+	if kind == "p3_letter":
+		_dlg_text.text = _p3_try_letter(npc)
 		_update_dlg_friend()
 		_refresh_hud()
 		return
@@ -1043,6 +1104,7 @@ func _qa_answer_pressed(idx: int) -> void:
 		gpa = minf(10.0, gpa + 0.02)
 		_show_toast("Not quite — but attending and trying still counts. Review the topic in the library.")
 	_complete_quest_if("attend_lecture")
+	_p3_on_action("lecture")
 	_refresh_hud()
 
 func _do_study(group: bool) -> void:
@@ -1073,6 +1135,7 @@ func _do_study(group: bool) -> void:
 	gpa = minf(10.0, gpa + 0.03)
 	stress = maxf(0.0, stress - 2.0)
 	_complete_quest_if("study_session")
+	_p3_on_action("study")
 	_refresh_hud()
 
 func _do_submit() -> void:
@@ -1116,6 +1179,7 @@ func _do_job(job_id: String) -> void:
 	stress = minf(100.0, stress + 3.0)
 	_show_toast("%s done! +₹%d. Total earned: ₹%d." % [str(job["title"]), int(job["pay"]), _earned_total])
 	_complete_quest_if("job_shift")
+	_p3_on_action("job")
 	_refresh_hud()
 
 func _do_sleep() -> void:
@@ -1131,7 +1195,8 @@ func _advance_day() -> void:
 	# attendance consequences + professor remarks, overdue assignments,
 	# calendar events, fresh messages/buzz, daily resets, autosave.
 	var weekday := (day - 1) % 7 # 0=Mon .. 4=Fri are lecture days
-	if weekday < 5:
+	# Phase 3: no attendance penalty during the Diwali break (Days 49-51).
+	if weekday < 5 and not (day >= 49 and day <= 51):
 		var missed := 0
 		for p in ["am1", "am2", "pm"]:
 			if not _attended_keys.has("%d_%s" % [day, p]):
@@ -1143,6 +1208,7 @@ func _advance_day() -> void:
 			_add_message(str(info["teacher"]), "Attendance note: you missed %d lecture slot(s) today. GPA reflects attendance — see me in office hours." % missed)
 	day += 1
 	game_minutes = 360.0 # 06:00
+	_p3_on_day_start()
 	energy = 95.0
 	health = minf(100.0, health + 5.0)
 	stress = maxf(0.0, stress - 10.0)
@@ -1206,7 +1272,8 @@ func _collect_state() -> Dictionary:
 		"friendships": fr, "memories": mem, "dialogue_seen": seen,
 		"assignments": asg, "attended": _attended_keys.duplicate(),
 		"jobs_done_day": _jobs_today.duplicate(), "jobs_done_total": _jobs_total.duplicate(),
-		"quest_index": _quest_index, "messages": msgs, "buzz": bz
+		"quest_index": _quest_index, "messages": msgs, "buzz": bz,
+		"p3": _p3_collect_state()
 	}
 
 func _apply_state(state: Dictionary) -> void:
@@ -1246,6 +1313,8 @@ func _apply_state(state: Dictionary) -> void:
 	_jobs_today = (state.get("jobs_done_day", {}) as Dictionary).duplicate()
 	_jobs_total = (state.get("jobs_done_total", {}) as Dictionary).duplicate()
 	_quest_index = int(state.get("quest_index", 0))
+	if state.has("p3") and state["p3"] is Dictionary:
+		_p3_apply_state(state["p3"])
 	_messages = []
 	for m in state.get("messages", []):
 		_messages.append((m as Dictionary).duplicate())
@@ -1309,6 +1378,10 @@ func _create_start_pressed() -> void:
 func _set_phone_tab(tab: String) -> void:
 	_phone_tab = tab
 	_phone_job_row.visible = (tab == "Jobs")
+	if _phone_city_row != null:
+		_phone_city_row.visible = (tab == "City Gate")
+	if _phone_action_row != null:
+		_phone_action_row.visible = (tab == "Stories")
 	_phone_text.text = _phone_text_for(tab)
 
 func _phone_text_for(tab: String) -> String:
@@ -1351,12 +1424,663 @@ func _phone_text_for(tab: String) -> String:
 			return "WALLET\nMoney: ₹%d\nTotal earned from jobs: ₹%d\n\nSTATS\nGPA: %.2f / 10\nHealth: %d\nStress: %d\nSocial: %d\nEnergy: %d\n\nSKILLS\nStudy %d • Sport %d • Music/Art %d • Tech %d • Communication %d" % [money, _earned_total, gpa, int(health), int(stress), int(social), int(energy), int(skills["Study"]), int(skills["Sport"]), int(skills["Music/Art"]), int(skills["Tech"]), int(skills["Communication"])]
 		"Jobs":
 			var out5 := "PART-TIME JOBS (one shift per job per day):\n\n"
+
 			for jid in Phase2Data.jobs().keys():
 				var j: Dictionary = Phase2Data.jobs()[jid]
 				out5 += "%s — ₹%d, %s. Done today: %s. Total shifts: %d\n" % [str(j["title"]), int(j["pay"]), str(j["where"]), "yes" if bool(_jobs_today.get(jid, false)) else "no", int(_jobs_total.get(jid, 0))]
 			out5 += "\nTap a job button below to work it (location jobs need you to be there)."
 			return out5
+		"Stories":
+			return _p3_stories_text()
+		"Social":
+			if _p3_social_posts.is_empty():
+				return "CAMPUS SOCIAL — no posts yet. Posts appear as arcs, favours, events, gossip and festivals happen."
+			var out6 := "CAMPUS SOCIAL — what campus is posting:\n\n"
+			for i in range(_p3_social_posts.size() - 1, -1, -1):
+				var p: Dictionary = _p3_social_posts[i]
+				out6 += "Day %d — %s:\n%s\n\n" % [int(p["day"]), str(p["author"]), str(p["text"])]
+			return out6
+		"City Gate":
+			var out7 := "CITY GATE — day trips by bus from the Main Gate (one trip per day).\nThe city district itself arrives in Phase 4; these trips are a teaser.\nYou are in: %s%s\n\n" % [_player_zone(), "" if _player_zone() == "gate" else " — go to the Main Gate to catch the bus."]
+			for tid in Phase3Data.city_trips().keys():
+				var t: Dictionary = Phase3Data.city_trips()[tid]
+				out7 += "%s — ₹%d. %s\n\n" % [str(t["title"]), int(t["cost"]), str(t["desc"])]
+			out7 += "Tap a trip button below (at the Main Gate) to travel."
+			return out7
 	return ""
+
+# ---------------- Phase 3 systems ----------------
+
+func _p3_npc_by_name(nm: String) -> NPC:
+	for n in _mains + _teachers:
+		var npc := n as NPC
+		if str(npc.data["name"]) == nm:
+			return npc
+	return null
+
+func _p3_post(author: String, text: String) -> void:
+	_p3_social_posts.append({"day": day, "author": author, "text": text})
+	while _p3_social_posts.size() > 50:
+		_p3_social_posts.pop_front()
+
+func _p3_add_gossip(text: String, delta: float) -> void:
+	social = clampf(social + delta, 0.0, 100.0)
+	_p3_gossip_log.append({"day": day, "text": text, "delta": delta})
+	_p3_post("Campus Gossip", text)
+
+func _p3_apply_reward(step: Dictionary, giver_name: String) -> String:
+	money += int(step.get("money", 0))
+	social = clampf(social + float(step.get("social", 0)), 0.0, 100.0)
+	gpa = clampf(gpa + float(step.get("gpa", 0.0)), 0.0, 10.0)
+	var giver := _p3_npc_by_name(giver_name)
+	if giver != null:
+		giver.friendship = mini(100, giver.friendship + int(step.get("friend", 0)))
+	var bits: Array = []
+	if int(step.get("money", 0)) != 0:
+		bits.append("₹%d" % int(step.get("money", 0)))
+	if int(step.get("friend", 0)) != 0:
+		bits.append("friendship +%d" % int(step.get("friend", 0)))
+	if int(step.get("social", 0)) != 0:
+		bits.append("social +%d" % int(step.get("social", 0)))
+	if float(step.get("gpa", 0.0)) != 0.0:
+		bits.append("GPA +%.2f" % float(step.get("gpa", 0.0)))
+	return ", ".join(PackedStringArray(bits))
+
+func _p3_steps_for(nm: String, is_teacher: bool) -> Array:
+	if is_teacher:
+		var ta: Dictionary = Phase3Data.teacher_arcs()
+		if ta.has(nm):
+			return (ta[nm] as Dictionary)["steps"]
+		return []
+	var ar: Dictionary = Phase3Data.arcs()
+	if ar.has(nm):
+		return (ar[nm] as Dictionary)["steps"]
+	return []
+
+func _p3_progress(nm: String, is_teacher: bool) -> int:
+	if is_teacher:
+		return int(_p3_teacher_progress.get(nm, 0))
+	return int(_p3_arc_progress.get(nm, 0))
+
+func _p3_complete_arc_step(nm: String, is_teacher: bool) -> String:
+	var steps: Array = _p3_steps_for(nm, is_teacher)
+	var prog := _p3_progress(nm, is_teacher)
+	if prog >= steps.size():
+		return ""
+	var step: Dictionary = steps[prog]
+	var reward := _p3_apply_reward(step, nm)
+	prog += 1
+	if is_teacher:
+		_p3_teacher_progress[nm] = prog
+	else:
+		_p3_arc_progress[nm] = prog
+	var done := prog >= steps.size()
+	if done:
+		if is_teacher:
+			_p3_teacher_done[nm] = true
+		else:
+			_p3_arc_done[nm] = true
+		social = minf(100.0, social + 5.0)
+		_p3_post(nm, "Finished the '%s' story with you. Campus will hear about this one." % (Phase3Data.teacher_arcs()[nm]["title"] if is_teacher and Phase3Data.teacher_arcs().has(nm) else (Phase3Data.arcs()[nm]["title"] if Phase3Data.arcs().has(nm) else "story")))
+		_show_mission("Story complete: %s" % str(step["title"]), "%s's arc is finished! %s" % [nm, reward])
+		return "📖 Story complete: %s — %s's arc is finished! (%s, social +5.)" % [str(step["title"]), nm, reward]
+	_p3_post(nm, "Story update: %s — %s." % [str(step["title"]), str(step["desc"])])
+	_show_toast("📖 Story progress: %s (%s)" % [str(step["title"]), reward])
+	return "📖 Story progress: %s (%s)" % [str(step["title"]), reward]
+
+func _p3_complete_favour(fav: Dictionary) -> String:
+	_p3_favours.erase(fav)
+	_p3_favours_done += 1
+	var giver := str(fav["giver"])
+	var gnpc := _p3_npc_by_name(giver)
+	if gnpc != null:
+		gnpc.friendship = mini(100, gnpc.friendship + int(fav.get("friend", 0)))
+	money += int(fav.get("money", 0))
+	social = clampf(social + float(fav.get("social", 0)), 0.0, 100.0)
+	_p3_post(giver, "You came through on a favour — %s. Noted, and remembered." % str(fav["title"]))
+	_show_toast("🤝 Favour done: %s (+₹%d, friendship +%d)" % [str(fav["title"]), int(fav.get("money", 0)), int(fav.get("friend", 0))])
+	return "🤝 Favour done: %s — %s remembers this." % [str(fav["title"]), giver]
+
+func _p3_advance_storyline(action: String) -> bool:
+	var sl: Array = Phase3Data.storyline()
+	if _p3_story_idx >= sl.size():
+		return false
+	var step: Dictionary = sl[_p3_story_idx]
+	if str(step["action"]) != action:
+		return false
+	_p3_story_idx += 1
+	social = minf(100.0, social + 4.0)
+	_p3_post("Northbridge Admin", "Semester storyline: %s — done." % str(step["title"]))
+	_show_mission("Semester storyline: %s" % str(step["title"]), "Next: %s" % (str(sl[_p3_story_idx]["title"]) if _p3_story_idx < sl.size() else "Results are in. What a semester."))
+	return true
+
+# Advance every started arc / favour / storyline step whose NEXT step
+# matches this action. Arcs only ever advance on their next step, so an
+# action can never skip an arc's talk step.
+func _p3_on_action(action: String, actor: String = "") -> int:
+	var count := 0
+	for nm in Phase3Data.arcs().keys():
+		var steps: Array = _p3_steps_for(str(nm), false)
+		var prog := _p3_progress(str(nm), false)
+		if prog < steps.size():
+			var st: Dictionary = steps[prog]
+			# Visit steps encode the zone in the action itself, so their
+			# target field is informational; office steps match the actor.
+			if str(st["action"]) == action and (str(st.get("target", "")) == "" or str(st.get("target", "")) == actor or action.begins_with("visit:")):
+				_p3_complete_arc_step(str(nm), false)
+				count += 1
+	for nm in Phase3Data.teacher_arcs().keys():
+		var steps2: Array = _p3_steps_for(str(nm), true)
+		var prog2 := _p3_progress(str(nm), true)
+		if prog2 < steps2.size():
+			var st2: Dictionary = steps2[prog2]
+			if str(st2["action"]) == action and (str(st2.get("target", "")) == "" or str(st2.get("target", "")) == actor or action.begins_with("visit:")):
+				_p3_complete_arc_step(str(nm), true)
+				count += 1
+	for fav in _p3_favours.duplicate():
+		var f: Dictionary = fav
+		if str(f.get("match", "")) == action:
+			_p3_complete_favour(f)
+			count += 1
+	if _p3_advance_storyline(action):
+		count += 1
+	return count
+
+func _p3_on_talk(npc: NPC) -> String:
+	var nm := str(npc.data["name"])
+	var notes: Array = []
+	# 1) Invitation kept: talking to the inviter on the due day keeps it.
+	for plan in _p3_invitations.duplicate():
+		var p: Dictionary = plan
+		if str(p["with"]) == nm and int(p["day_due"]) == day:
+			_p3_invitations.erase(plan)
+			npc.friendship = mini(100, npc.friendship + 4)
+			social = minf(100.0, social + 3.0)
+			_p3_post(nm, "Met up as planned — %s. Plans kept are friendship's currency." % str(p["kind"]))
+			notes.append("✉️ Plan kept: %s with %s. (friendship +4, social +3.)" % [str(p["kind"]), nm])
+	# 2) Own arc talk step (mains + teachers).
+	var steps: Array = _p3_steps_for(nm, npc.is_teacher)
+	var prog := _p3_progress(nm, npc.is_teacher)
+	if prog < steps.size() and str((steps[prog] as Dictionary)["action"]) == "talk":
+		notes.append(_p3_complete_arc_step(nm, npc.is_teacher))
+	# 3) Favours delivered by talking to the target person.
+	for fav in _p3_favours.duplicate():
+		var f: Dictionary = fav
+		if str(f.get("match", "")) == "talk_to:" + nm:
+			notes.append(_p3_complete_favour(f))
+	# 4) Storyline: talking to any teacher.
+	if npc.is_teacher:
+		if _p3_advance_storyline("talk_teacher"):
+			notes.append("🎓 Semester storyline: Orientation complete — you met the faculty.")
+	return "\n".join(PackedStringArray(notes))
+
+func _p3_story_text(npc: NPC) -> String:
+	var nm := str(npc.data["name"])
+	var table: Dictionary = Phase3Data.teacher_arcs() if npc.is_teacher else Phase3Data.arcs()
+	if not table.has(nm):
+		return "%s has no story arc yet — more arcs arrive with later phases." % nm
+	var arc: Dictionary = table[nm]
+	var steps: Array = arc["steps"]
+	var prog := _p3_progress(nm, npc.is_teacher)
+	if prog >= steps.size():
+		return "📖 '%s' — COMPLETE. %s" % [str(arc["title"]), str(arc["premise"])]
+	var st: Dictionary = steps[prog]
+	return "📖 '%s' — %s\nStep %d of %d: %s — %s" % [str(arc["title"]), str(arc["premise"]), prog + 1, steps.size(), str(st["title"]), str(st["desc"])]
+
+func _p3_offer_favour(npc: NPC) -> Dictionary:
+	var idx := 0
+	for i in range(_mains.size()):
+		if _mains[i] == npc:
+			idx = i
+			break
+	var tpl: Dictionary = Phase3Data.favour_templates()[(idx + day) % Phase3Data.favour_templates().size()]
+	var tgt: Dictionary = Phase3Data.favour_targets()[idx % Phase3Data.favour_targets().size()]
+	var fav: Dictionary = {"giver": str(npc.data["name"]), "title": str(tpl["title"]), "day_offered": day,
+		"money": int(tpl["money"]), "friend": int(tpl["friend"]), "social": int(tpl["social"])}
+	if str(tpl["action"]) == "talk_to":
+		fav["match"] = "talk_to:" + str(tgt["person"])
+		fav["desc"] = str(tpl["desc"]).replace("{name}", str(npc.data["name"])).replace("{target}", str(tgt["person"]))
+	elif str(tpl["action"]) == "visit":
+		fav["match"] = "visit:" + str(tgt["zone"])
+		fav["desc"] = str(tpl["desc"]).replace("{name}", str(npc.data["name"])).replace("{target_name}", str(tgt["zone_name"]))
+	else:
+		fav["match"] = "job"
+		fav["desc"] = str(tpl["desc"]).replace("{name}", str(npc.data["name"]))
+	_p3_favours.append(fav)
+	return fav
+
+func _p3_favour_text(npc: NPC) -> String:
+	var nm := str(npc.data["name"])
+	for fav in _p3_favours:
+		var f: Dictionary = fav
+		if str(f["giver"]) == nm:
+			return "🤝 Open favour from %s: %s — %s (reward: ₹%d, friendship +%d.)" % [nm, str(f["title"]), str(f["desc"]), int(f["money"]), int(f["friend"])]
+	var fav2 := _p3_offer_favour(npc)
+	return "🤝 New favour from %s: %s — %s (reward: ₹%d, friendship +%d. Leave it 2 days and it counts as broken.)" % [nm, str(fav2["title"]), str(fav2["desc"]), int(fav2["money"]), int(fav2["friend"])]
+
+func _p3_invite_text(npc: NPC) -> String:
+	var nm := str(npc.data["name"])
+	for plan in _p3_invitations:
+		var p: Dictionary = plan
+		if str(p["with"]) == nm and int(p["day_due"]) >= day:
+			return "✉️ Plan already set with %s: %s on Day %d at the %s. Talk to them that day to keep it." % [nm, str(p["kind"]), int(p["day_due"]), str(p["zone"])]
+	if npc.friendship < 20:
+		return "%s smiles politely but is not sure yet — build a little friendship first (need 20, you are at %d)." % [nm, npc.friendship]
+	_p3_invitations.append({"with": nm, "kind": "chai at the Food Court", "zone": "foodcourt", "day_due": day + 1, "from": "player"})
+	return "✉️ You invited %s for chai at the Food Court on Day %d. Talk to them that day to keep the plan — breaking it costs friendship and starts gossip." % [nm, day + 1]
+
+func _p3_try_romance(npc: NPC) -> String:
+	if not npc.is_main:
+		return "Romance is a story for the Ten, not for faculty — nice try, though."
+	var nm := str(npc.data["name"])
+	if _romance_partner == nm:
+		return "💛 You and %s are already together. Sweet, steady, no drama required." % nm
+	if _romance_partner != "":
+		return "💛 You are already with %s. Campus romance, like a timetable, does not double-book." % _romance_partner
+	if npc.friendship < 65:
+		return "💛 %s likes you, but not like that — yet. (Need friendship 65+, you are at %d. Finish their story arc first, too.)" % [nm, npc.friendship]
+	if not bool(_p3_arc_done.get(nm, false)):
+		return "💛 %s wants to know you properly first — finish their story arc, then ask again." % nm
+	_romance_partner = nm
+	npc.friendship = mini(100, npc.friendship + 5)
+	social = minf(100.0, social + 5.0)
+	_note_memory(npc, "the day you asked them out")
+	_p3_post(nm, "Some news, kept tasteful: you and %s are together now. Campus approves, quietly." % player_name)
+	return "💛 %s said yes. You are together now — choices-gated, never forced, and entirely yours to keep." % nm
+
+func _p3_try_letter(npc: NPC) -> String:
+	if not npc.is_teacher:
+		return "Recommendation letters come from faculty, not fellow students."
+	var nm := str(npc.data["name"])
+	if _teacher_letters.has(nm):
+		return "📜 %s already wrote you a recommendation letter. One per teacher — do not be greedy." % nm
+	if gpa < 7.5:
+		return "📜 %s is kind but honest: your GPA (%.2f) needs to be 7.5+ before they put their name on a letter." % [nm, gpa]
+	if npc.friendship < 40:
+		return "📜 %s wants to know your work first — friendship 40+ (you are at %d). Office hours help." % [nm, npc.friendship]
+	_teacher_letters.append(nm)
+	social = minf(100.0, social + 5.0)
+	_add_message(nm, "Recommendation letter: I have written one for you. Use it well — my name travels with it.")
+	_p3_post(nm, "%s wrote a recommendation letter for you. That name carries weight on this campus." % nm)
+	return "📜 %s wrote you a recommendation letter! (social +5.) It is in your messages." % nm
+
+func _p3_check_zone(zone: String, force: bool = false) -> void:
+	if (_capture_mode or _test_mode) and not force:
+		return
+	_p3_on_action("visit:" + zone)
+	if day == 63 and (zone == "quad" or zone == "garden") and not _p3_holi_done:
+		_p3_holi_done = true
+		social = minf(100.0, social + 5.0)
+		_p3_post("Campus Events", "Holi on the Quad: colours, music, and you, right in the middle of it.")
+		_show_toast("🎨 Holi! Colours everywhere. Social +5.")
+
+func _p3_attend_event(ev: Dictionary) -> bool:
+	var key := "%d_%s" % [day, str(ev["title"])]
+	if _p3_events_attended.has(key):
+		return false
+	_p3_events_attended.append(key)
+	social = minf(100.0, social + 4.0)
+	if bool(ev.get("practice", false)):
+		_fest_practice += 1
+	_p3_post("Campus Events", "You joined %s — %s" % [str(ev["title"]), str(ev["desc"])])
+	_p3_on_action("group_event")
+	_show_toast("🎉 Joined %s! Social +4.%s" % [str(ev["title"]), " Fest practice +1." if bool(ev.get("practice", false)) else ""])
+	return true
+
+func _p3_check_in() -> void:
+	var weekday := (day - 1) % 7
+	var hour := game_minutes / 60.0
+	var zone := _player_zone()
+	for ev in Phase3Data.group_events():
+		var e: Dictionary = ev
+		if int(e["weekday"]) == weekday and hour >= float(e["hour_start"]) and hour < float(e["hour_end"]):
+			if zone != str(e["zone"]):
+				_show_toast("That event (%s) is at the %s — you are in %s." % [str(e["title"]), ZONE_NAMES.get(str(e["zone"]), str(e["zone"])), ZONE_NAMES.get(zone, zone)])
+				return
+			if not _p3_attend_event(e):
+				_show_toast("You already joined %s today." % str(e["title"]))
+			_set_phone_tab("Stories")
+			return
+	if day >= 36 and day <= 40 and (zone == "garden" or zone == "union" or zone == "quad"):
+		social = minf(100.0, social + 3.0)
+		_p3_post("Campus Events", "Cultural Fest, Day %d: you were there, in the crowd, part of it." % day)
+		_show_toast("🎪 Cultural Fest! You soaked it in. Social +3.")
+		_set_phone_tab("Stories")
+		return
+	if day == 63 and (zone == "quad" or zone == "garden"):
+		_p3_check_zone(zone, true)
+		_set_phone_tab("Stories")
+		return
+	_show_toast("Nothing to join here right now. Today's group events are on the Stories tab.")
+
+func _do_city_trip(tid: String) -> void:
+	var trips := Phase3Data.city_trips()
+	if not trips.has(tid):
+		return
+	var t: Dictionary = trips[tid]
+	if _player_zone() != "gate":
+		_show_toast("City trips leave from the Main Gate — walk to the gate bus loop first.")
+		return
+	if _city_trip_day == day:
+		_show_toast("You already took a city trip today. One bus ride a day, student budget.")
+		return
+	if money < int(t["cost"]):
+		_show_toast("Not enough money for %s (₹%d). You have ₹%d." % [str(t["title"]), int(t["cost"]), money])
+		return
+	money -= int(t["cost"])
+	_city_trip_day = day
+	if tid == "market":
+		energy = minf(100.0, energy + 15.0)
+		health = minf(100.0, health + 5.0)
+	elif tid == "cinema":
+		stress = maxf(0.0, stress - 15.0)
+		social = minf(100.0, social + 3.0)
+	elif tid == "bookstore":
+		gpa = minf(10.0, gpa + 0.02)
+		var cur := _current_assignment()
+		if cur != null and not bool(cur["submitted"]):
+			cur["progress"] = mini(100, int(cur["progress"]) + 10)
+	_p3_post("City Bus", "Day trip: %s. %s (The full city district arrives in Phase 4.)" % [str(t["title"]), str(t["desc"])])
+	_show_toast("🚌 Day trip: %s (−₹%d). The bus drops you back at the gate by evening." % [str(t["title"]), int(t["cost"])])
+	_refresh_hud()
+
+func _p3_expire_plans() -> void:
+	for plan in _p3_invitations.duplicate():
+		var p: Dictionary = plan
+		if int(p["day_due"]) < day:
+			_p3_invitations.erase(plan)
+			var other := _p3_npc_by_name(str(p["with"]))
+			if other != null:
+				other.friendship = maxi(0, other.friendship - 4)
+			social = maxf(0.0, social - 3.0)
+			_p3_add_gossip("Gossip: you stood up %s on a %s plan. Campus noticed." % [str(p["with"]), str(p["kind"])], 0.0)
+	for fav in _p3_favours.duplicate():
+		var f: Dictionary = fav
+		if day - int(f["day_offered"]) >= 2:
+			_p3_favours.erase(fav)
+			var giver := _p3_npc_by_name(str(f["giver"]))
+			if giver != null:
+				giver.friendship = maxi(0, giver.friendship - 3)
+			_p3_add_gossip("Gossip: %s's favour (%s) was left hanging for days." % [str(f["giver"]), str(f["title"])], 0.0)
+
+func _p3_on_day_start() -> void:
+	# Festivals, broken plans/favours, NPC invitations, ambient feed posts.
+	for fest in Phase3Data.festivals():
+		var f: Dictionary = fest
+		if day == int(f["day_start"]):
+			_add_message("Northbridge Admin", "%s starts today! %s" % [str(f["title"]), str(f["desc"])])
+			_p3_post("Campus Events", "%s begins! %s" % [str(f["title"]), str(f["desc"])])
+		if str(f["title"]) == "Cultural Fest" and day == int(f["day_end"]):
+			var verdict := ""
+			if _fest_practice >= 3:
+				verdict = "a triumph — the judges (Dr. Kapoor and Prof. D'Souza) praised the performances, and the crowd stayed till the lights went out"
+				social = minf(100.0, social + 10.0)
+			elif _fest_practice >= 1:
+				verdict = "warm and well-attended — practice showed, and the judges noticed"
+				social = minf(100.0, social + 5.0)
+			else:
+				verdict = "quiet — the shows happened, but without rehearsal they never quite lifted off"
+				social = minf(100.0, social + 2.0)
+			_p3_fest_result = verdict
+			_add_message("Dr. Kapoor", "Cultural Fest verdict: %s. (Fest practice sessions attended: %d.)" % [verdict, _fest_practice])
+			_p3_post("Campus Events", "Cultural Fest closes: %s." % verdict)
+	_p3_expire_plans()
+	if day % 3 == 0 and not _mains.is_empty():
+		var inviter: NPC = _mains[day % _mains.size()]
+		_p3_invitations.append({"with": str(inviter.data["name"]), "kind": "chai at the Food Court", "zone": "foodcourt", "day_due": day, "from": "npc"})
+		_add_message(str(inviter.data["name"]), "Hey — chai at the Food Court today? Talk to me today if you can make it, otherwise I will understand (and gossip, gently).")
+	if not _mains.is_empty():
+		var tpl: Array = Phase3Data.social_templates()
+		var poster: NPC = _mains[day % _mains.size()]
+		_p3_post(str(poster.data["name"]), str(tpl[day % tpl.size()]).replace("{name}", str(poster.data["name"])))
+	if _p3_story_idx == 3 and day >= 70:
+		_p3_story_idx = 4
+		social = minf(100.0, social + 10.0)
+		_add_message("Northbridge Admin", "Results Day: grades are published at the Admin Block. Whatever they say, you lived this semester.")
+		_p3_post("Northbridge Admin", "Results Day is here. The semester's story is written — by you.")
+
+func _p3_stories_text() -> String:
+	var out := "STORIES — character arcs, storyline, favours, plans:\n\n"
+	out += "MAIN STORYLINE:\n"
+	var sl: Array = Phase3Data.storyline()
+	for i in range(sl.size()):
+		var mark := "✓ " if i < _p3_story_idx else ("→ " if i == _p3_story_idx else "○ ")
+		out += "%s%s — %s\n" % [mark, str(sl[i]["title"]), str(sl[i]["desc"])]
+	out += "\nCHARACTER ARCS (talk to them; Story button shows the next step):\n"
+	for nm in Phase3Data.arcs().keys():
+		var arc: Dictionary = Phase3Data.arcs()[nm]
+		var prog := int(_p3_arc_progress.get(nm, 0))
+		var steps: Array = arc["steps"]
+		out += "- %s, '%s': %d/%d %s\n" % [str(nm), str(arc["title"]), prog, steps.size(), "COMPLETE" if prog >= steps.size() else str(steps[prog]["title"])]
+	out += "\nTEACHER ARCS:\n"
+	for nm in Phase3Data.teacher_arcs().keys():
+		var arc2: Dictionary = Phase3Data.teacher_arcs()[nm]
+		var prog2 := int(_p3_teacher_progress.get(nm, 0))
+		var steps2: Array = arc2["steps"]
+		out += "- %s, '%s': %d/%d %s\n" % [str(nm), str(arc2["title"]), prog2, steps2.size(), "COMPLETE" if prog2 >= steps2.size() else str(steps2[prog2]["title"])]
+	out += "\nFAVOURS DONE: %d • OPEN FAVOURS:\n" % _p3_favours_done
+	if _p3_favours.is_empty():
+		out += "- none. Talk to a main and press Favour.\n"
+	for fav in _p3_favours:
+		var f: Dictionary = fav
+		out += "- %s: %s — %s\n" % [str(f["giver"]), str(f["title"]), str(f["desc"])]
+	out += "\nPLANS / INVITATIONS:\n"
+	if _p3_invitations.is_empty():
+		out += "- none. Invite someone from their dialogue panel.\n"
+	for plan in _p3_invitations:
+		var p: Dictionary = plan
+		out += "- %s: %s, Day %d (%s)\n" % [str(p["with"]), str(p["kind"]), int(p["day_due"]), str(p["from"])]
+	out += "\nFESTIVALS: Cultural Fest Days 36–40 (practice: %d sessions) • Diwali Break Days 49–51 • Holi Day 63\n" % _fest_practice
+	if _romance_partner != "":
+		out += "💛 Together with: %s\n" % _romance_partner
+	if not _teacher_letters.is_empty():
+		out += "📜 Recommendation letters from: %s\n" % ", ".join(PackedStringArray(_teacher_letters))
+	out += "\nTODAY'S GROUP EVENTS (use Check in here while at the venue):\n"
+	var weekday := (day - 1) % 7
+	for ev in Phase3Data.group_events():
+		var e: Dictionary = ev
+		if int(e["weekday"]) == weekday:
+			out += "- %s at %s, %.0f:00–%.0f:00. %s\n" % [str(e["title"]), ZONE_NAMES.get(str(e["zone"]), str(e["zone"])), float(e["hour_start"]), float(e["hour_end"]), str(e["desc"])]
+	return out
+
+func _p3_collect_state() -> Dictionary:
+	var favs: Array = []
+	for f in _p3_favours:
+		favs.append((f as Dictionary).duplicate())
+	var plans: Array = []
+	for p in _p3_invitations:
+		plans.append((p as Dictionary).duplicate())
+	var posts: Array = []
+	for p in _p3_social_posts:
+		posts.append((p as Dictionary).duplicate())
+	var gos: Array = []
+	for g in _p3_gossip_log:
+		gos.append((g as Dictionary).duplicate())
+	return {
+		"arc_progress": _p3_arc_progress.duplicate(), "arc_done": _p3_arc_done.duplicate(),
+		"teacher_progress": _p3_teacher_progress.duplicate(), "teacher_done": _p3_teacher_done.duplicate(),
+		"story_idx": _p3_story_idx, "favours": favs, "favours_done": _p3_favours_done,
+		"invitations": plans, "social_posts": posts, "gossip": gos,
+		"events_attended": _p3_events_attended.duplicate(), "fest_practice": _fest_practice,
+		"holi_done": _p3_holi_done, "fest_result": _p3_fest_result,
+		"romance": _romance_partner, "letters": _teacher_letters.duplicate(),
+		"city_trip_day": _city_trip_day
+	}
+
+func _p3_apply_state(d: Dictionary) -> void:
+	_p3_arc_progress = (d.get("arc_progress", {}) as Dictionary).duplicate()
+	_p3_arc_done = (d.get("arc_done", {}) as Dictionary).duplicate()
+	_p3_teacher_progress = (d.get("teacher_progress", {}) as Dictionary).duplicate()
+	_p3_teacher_done = (d.get("teacher_done", {}) as Dictionary).duplicate()
+	_p3_story_idx = int(d.get("story_idx", 0))
+	_p3_favours = []
+	for f in d.get("favours", []):
+		_p3_favours.append((f as Dictionary).duplicate())
+	_p3_favours_done = int(d.get("favours_done", 0))
+	_p3_invitations = []
+	for p in d.get("invitations", []):
+		_p3_invitations.append((p as Dictionary).duplicate())
+	_p3_social_posts = []
+	for p in d.get("social_posts", []):
+		_p3_social_posts.append((p as Dictionary).duplicate())
+	_p3_gossip_log = []
+	for g in d.get("gossip", []):
+		_p3_gossip_log.append((g as Dictionary).duplicate())
+	_p3_events_attended = (d.get("events_attended", []) as Array).duplicate()
+	_fest_practice = int(d.get("fest_practice", 0))
+	_p3_holi_done = bool(d.get("holi_done", false))
+	_p3_fest_result = str(d.get("fest_result", ""))
+	_romance_partner = str(d.get("romance", ""))
+	_teacher_letters = (d.get("letters", []) as Array).duplicate()
+	_city_trip_day = int(d.get("city_trip_day", -1))
+
+func _p3_seed_capture_posts() -> void:
+	# Capture-only staging (like staged NPCs): the Social tab needs posts
+	# to photograph on Day 1, before any arc has been played.
+	if not _p3_social_posts.is_empty():
+		return
+	_p3_post("Anirudh", "Campus app demo at the Union soon. If it crashes live, pretend it is a feature.")
+	_p3_post("Yumi", "Dance rehearsal ran over, feet hurt, heart full. Fest piece is coming together.")
+	_p3_post("Campus Gossip", "Word is Chirag's chai stall pitch finally found a supplier. Zannat remains sceptical, on principle.")
+	_p3_post("Campus Events", "Cultural Fest auditions soon at the amphitheatre. Perform, volunteer, or watch — but be there.")
+
+func _run_phase3_tests() -> bool:
+	# Phase 3 headless evidence: one arc start→finish, a favour, an
+	# invitation kept + one broken, a gossip effect, storyline progress
+	# with Results locked, romance gating, a city trip, fest practice,
+	# and social-feed generation.
+	var ok := true
+	print("[TEST_P3] arcs defined: ", Phase3Data.arcs().size(), " teacher arcs: ", Phase3Data.teacher_arcs().size())
+	if Phase3Data.arcs().size() != 10:
+		print("[TEST_P3_FAIL] expected 10 character arcs")
+		ok = false
+	for nm in Phase3Data.arcs().keys():
+		if (Phase3Data.arcs()[nm]["steps"] as Array).size() < 2:
+			print("[TEST_P3_FAIL] arc ", nm, " has fewer than 2 steps")
+			ok = false
+	# 1) Anirudh arc start -> finish (acceptance test).
+	var ani := _p3_npc_by_name("Anirudh")
+	_p3_on_talk(ani)
+	if _p3_progress("Anirudh", false) != 1:
+		print("[TEST_P3_FAIL] Anirudh arc step 1 (talk) did not complete")
+		ok = false
+	_player.global_position = ZONE_CENTERS["union"]
+	_p3_check_zone("union", true)
+	if not bool(_p3_arc_done.get("Anirudh", false)):
+		print("[TEST_P3_FAIL] Anirudh arc did not complete end-to-end")
+		ok = false
+	else:
+		print("[TEST_P3_ARC] Anirudh 'Ship It' completed end-to-end: OK")
+	# 2) A favour, offered and completed through its own action.
+	var chirag := _p3_npc_by_name("Chirag")
+	var fav := _p3_offer_favour(chirag)
+	var match_str := str(fav["match"])
+	if match_str.begins_with("talk_to:"):
+		_p3_on_talk(_p3_npc_by_name(match_str.substr(8)))
+	elif match_str.begins_with("visit:"):
+		_player.global_position = ZONE_CENTERS[match_str.substr(6)]
+		_p3_on_action(match_str)
+	else:
+		_p3_on_action("job")
+	if _p3_favours_done < 1:
+		print("[TEST_P3_FAIL] favour was not completed via its action (", match_str, ")")
+		ok = false
+	else:
+		print("[TEST_P3_FAVOUR] favour '", str(fav["title"]), "' via ", match_str, ": OK")
+	# 3) Invitation kept, then one broken.
+	var zannat := _p3_npc_by_name("Zannat")
+	zannat.friendship = 30
+	_p3_invite_text(zannat)
+	var kept := false
+	for plan in _p3_invitations:
+		var p: Dictionary = plan
+		if str(p["with"]) == "Zannat":
+			p["day_due"] = day
+			kept = true
+	if not kept:
+		print("[TEST_P3_FAIL] player invitation to Zannat was not created")
+		ok = false
+	_p3_on_talk(zannat)
+	for plan in _p3_invitations:
+		if str((plan as Dictionary)["with"]) == "Zannat":
+			print("[TEST_P3_FAIL] kept invitation was not cleared on talking")
+			ok = false
+	print("[TEST_P3_INVITE] invitation kept via talk: OK")
+	_p3_invitations.append({"with": "Jatin", "kind": "chai at the Food Court", "zone": "foodcourt", "day_due": day - 1, "from": "npc"})
+	var soc_before := social
+	_p3_expire_plans()
+	if soc_before - social != 3.0:
+		print("[TEST_P3_FAIL] broken invitation did not cost exactly social -3 (", soc_before, " -> ", social, ")")
+		ok = false
+	else:
+		print("[TEST_P3_INVITE] broken invitation: social -3, gossip posted: OK")
+	# 4) Gossip effect.
+	soc_before = social
+	_p3_add_gossip("Test gossip: the test suite stood someone up, deliberately.", -2.0)
+	if social != soc_before - 2.0:
+		print("[TEST_P3_FAIL] gossip delta not applied")
+		ok = false
+	else:
+		print("[TEST_P3_GOSSIP] gossip delta -2 applied, feed post present: OK")
+	# 5) Storyline: orientation -> fest event -> exams prep; results locked.
+	var rag := _p3_npc_by_name("Prof. Raghavan")
+	_p3_on_talk(rag)
+	if _p3_story_idx != 1:
+		print("[TEST_P3_FAIL] storyline orientation step did not complete (idx=", _p3_story_idx, ")")
+		ok = false
+	_p3_attend_event(Phase3Data.group_events()[0])
+	if _p3_story_idx != 2:
+		print("[TEST_P3_FAIL] storyline fest step did not complete on group event (idx=", _p3_story_idx, ")")
+		ok = false
+	_p3_on_action("study")
+	if _p3_story_idx != 3:
+		print("[TEST_P3_FAIL] storyline exams-prep step did not complete on study (idx=", _p3_story_idx, ")")
+		ok = false
+	if _p3_story_idx == 4:
+		print("[TEST_P3_FAIL] storyline results step completed before Day 70")
+		ok = false
+	else:
+		print("[TEST_P3_STORY] storyline 3/4 done, Results locked until Day 70: OK")
+	# 6) Romance gating: refused before arc done, accepted after.
+	var aarya := _p3_npc_by_name("Aarya")
+	aarya.friendship = 80
+	var refused := _p3_try_romance(aarya)
+	if _romance_partner != "":
+		print("[TEST_P3_FAIL] romance accepted before arc completion")
+		ok = false
+	_p3_on_talk(aarya)
+	_p3_on_action("job")
+	if not bool(_p3_arc_done.get("Aarya", false)):
+		print("[TEST_P3_FAIL] Aarya arc did not complete via talk+job")
+		ok = false
+	_p3_try_romance(aarya)
+	if _romance_partner != "Aarya":
+		print("[TEST_P3_FAIL] romance not accepted after arc + friendship 80")
+		ok = false
+	else:
+		print("[TEST_P3_ROMANCE] refused first ('", refused.substr(0, 40), "…'), accepted after arc: OK")
+	# 7) City-gate trip: real cost, gate requirement honoured.
+	_player.global_position = ZONE_CENTERS["gate"]
+	var money_before := money
+	_do_city_trip("bookstore")
+	if money != money_before - 180:
+		print("[TEST_P3_FAIL] bookstore trip did not cost exactly ₹180 (", money_before, " -> ", money, ")")
+		ok = false
+	else:
+		print("[TEST_P3_CITY] bookstore trip ₹180, effects applied: OK")
+	# 8) Fest practice via a practice event.
+	_p3_attend_event(Phase3Data.group_events()[1])
+	if _fest_practice < 1:
+		print("[TEST_P3_FAIL] fest practice did not increment on Art Jam")
+		ok = false
+	else:
+		print("[TEST_P3_FEST] fest practice=", _fest_practice, ": OK")
+	print("[TEST_P3] social posts: ", _p3_social_posts.size(), " gossip entries: ", _p3_gossip_log.size(), " storyline idx: ", _p3_story_idx)
+	if _p3_social_posts.size() < 8:
+		print("[TEST_P3_FAIL] too few social-feed posts generated")
+		ok = false
+	print("[TEST_P3] RESULT: ", "PASS" if ok else "FAIL")
+	return ok
 
 # ---------------- UI ----------------
 
@@ -1500,8 +2224,8 @@ func _build_ui() -> void:
 	# dialogue panel
 	_dialog_panel = PanelContainer.new()
 	_dialog_panel.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	_dialog_panel.position = Vector2(-340, -300)
-	_dialog_panel.custom_minimum_size = Vector2(680, 285)
+	_dialog_panel.position = Vector2(-340, -380)
+	_dialog_panel.custom_minimum_size = Vector2(680, 340)
 	_dialog_panel.visible = false
 	layer.add_child(_dialog_panel)
 	var dv := VBoxContainer.new()
@@ -1511,7 +2235,7 @@ func _build_ui() -> void:
 	dv.add_child(_dlg_title)
 	_dlg_text = RichTextLabel.new()
 	_dlg_text.fit_content = true
-	_dlg_text.custom_minimum_size = Vector2(640, 120)
+	_dlg_text.custom_minimum_size = Vector2(640, 90)
 	_dlg_text.add_theme_font_size_override("normal_font_size", 17)
 	dv.add_child(_dlg_text)
 	_dlg_friend = _mk_label("", 15, Color(0.8, 1.0, 0.85))
@@ -1550,6 +2274,24 @@ func _build_ui() -> void:
 	_dlg_office_btn.text = "🎓 Office hours help"
 	_dlg_office_btn.pressed.connect(func() -> void: _dlg_choice("office"))
 	_dlg_btns2.add_child(_dlg_office_btn)
+	# Phase 3 dialogue third row: story / favour / invite / romance / letter
+	_dlg_btns3 = HBoxContainer.new()
+	_dlg_btns3.add_theme_constant_override("separation", 8)
+	dv.add_child(_dlg_btns3)
+	for spec in [["p3_story", "📖 Story"], ["p3_favour", "🤝 Favour"], ["p3_invite", "✉️ Invite"]]:
+		var pb := Button.new()
+		pb.text = spec[1]
+		pb.pressed.connect(_dlg_choice.bind(str(spec[0])))
+		_dlg_btns3.add_child(pb)
+	_dlg_romance_btn = Button.new()
+	_dlg_romance_btn.text = "💛 Something more?"
+	_dlg_romance_btn.pressed.connect(func() -> void: _dlg_choice("p3_romance"))
+	_dlg_btns3.add_child(_dlg_romance_btn)
+	_dlg_letter_btn = Button.new()
+	_dlg_letter_btn.text = "📜 Recommendation letter"
+	_dlg_letter_btn.pressed.connect(func() -> void: _dlg_choice("p3_letter"))
+	_dlg_btns3.add_child(_dlg_letter_btn)
+	_dlg_btns3.visible = false
 	# ---- Phone panel (Tab) ----
 	_phone_panel = PanelContainer.new()
 	_phone_panel.set_anchors_preset(Control.PRESET_CENTER)
@@ -1562,7 +2304,7 @@ func _build_ui() -> void:
 	pv.add_child(_mk_label("📱 PHONE — Northbridge Campus", 20, Color(1.0, 0.95, 0.7)))
 	var tabrow := HBoxContainer.new()
 	pv.add_child(tabrow)
-	for tab in ["Messages", "Buzz", "Calendar", "Map", "Wallet", "Jobs"]:
+	for tab in ["Messages", "Buzz", "Calendar", "Map", "Wallet", "Jobs", "Stories", "Social", "City Gate"]:
 		var tb2 := Button.new()
 		tb2.text = tab
 		tb2.pressed.connect(_set_phone_tab.bind(tab))
@@ -1581,6 +2323,21 @@ func _build_ui() -> void:
 		jb.pressed.connect(_do_job.bind(jid))
 		_phone_job_row.add_child(jb)
 	_phone_job_row.visible = false
+	_phone_city_row = HBoxContainer.new()
+	pv.add_child(_phone_city_row)
+	for tid in Phase3Data.city_trips().keys():
+		var cb := Button.new()
+		cb.text = str(Phase3Data.city_trips()[tid]["title"])
+		cb.pressed.connect(_do_city_trip.bind(tid))
+		_phone_city_row.add_child(cb)
+	_phone_city_row.visible = false
+	_phone_action_row = HBoxContainer.new()
+	pv.add_child(_phone_action_row)
+	var ab := Button.new()
+	ab.text = "📍 Check in here (group event / festival)"
+	ab.pressed.connect(func() -> void: _p3_check_in())
+	_phone_action_row.add_child(ab)
+	_phone_action_row.visible = false
 	# ---- Save / Load panel ----
 	_save_panel = PanelContainer.new()
 	_save_panel.set_anchors_preset(Control.PRESET_CENTER)
@@ -1732,6 +2489,8 @@ func _refresh_hud() -> void:
 		_minimap.update_data(_player.global_position, _player._yaw, mitems, qp, _quest_index < _quests.size())
 	if _quest_marker != null:
 		_quest_marker.visible = _quest_index < _quests.size()
+	if not _capture_mode and not _test_mode:
+		_p3_check_zone(_player_zone())
 	_refresh_classmates()
 
 func _refresh_classmates() -> void:
@@ -1933,7 +2692,38 @@ func _run_captures() -> void:
 	_shot(cam, Vector3(0, 1.7, 28), Vector3(1, 1.5, 95))
 	await get_tree().create_timer(0.9).timeout
 	await _shot_file("shot12_phone.png")
+	# Phase 3 shots: (13) phone Social feed tab, (14) phone Stories tab,
+	# (15) group event on the quad at street level, (16) arc dialogue
+	# with Anirudh (Story button visible in the panel).
+	_p3_seed_capture_posts()
+	_set_phone_tab("Social")
+	await get_tree().create_timer(0.6).timeout
+	_shot(cam, Vector3(0, 1.7, 28), Vector3(1, 1.5, 95))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot13_social_feed.png")
+	_set_phone_tab("Stories")
+	await get_tree().create_timer(0.6).timeout
+	_shot(cam, Vector3(0, 1.7, 28), Vector3(1, 1.5, 95))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot14_stories.png")
 	_phone_panel.visible = false
+	_stage(_mains[4], Vector3(-2, 0, 2), 0.3)
+	_stage(_mains[3], Vector3(2, 0, 3), -0.4)
+	_stage(_mains[7], Vector3(0, 0, 6), 0.1)
+	_stage(_mains[6], Vector3(-4, 0, 6), 0.5)
+	_player.global_position = Vector3(-130, 0, 100)
+	_shot(cam, Vector3(0, 1.7, 13), Vector3(0, 1.2, 3))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot15_group_event.png")
+	var ani2: NPC = _mains[0]
+	_player.global_position = ani2.global_position + Vector3(1.4, 0.1, 1.4)
+	_open_dialogue(ani2)
+	var ap2 := ani2.global_position
+	_shot(cam, ap2 + Vector3(2.0, 1.7, 2.6), ap2 + Vector3(0, 1.2, 0))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot16_arc_dialogue.png")
+	_close_dialogue()
+	_player.global_position = Vector3(-130, 0, 100)
 	print("[CAPTURE] done")
 	get_tree().quit(0)
 
