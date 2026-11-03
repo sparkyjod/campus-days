@@ -12,6 +12,7 @@ var controls_locked: bool = false
 # feeding the same movement code as WASD/gamepad.
 var mouse_sensitivity: float = 1.0
 var touch_dir: Vector2 = Vector2.ZERO
+var touch_run: bool = false # mobile build's on-screen Run hold-button
 
 var _yaw: float = 0.0
 var _pitch: float = -0.32
@@ -95,7 +96,7 @@ func _physics_process(delta: float) -> void:
 		_yaw -= rx * 2.0 * delta * mouse_sensitivity
 	if absf(ry) > 0.2 and not controls_locked:
 		_pitch = clampf(_pitch - ry * 2.0 * delta * mouse_sensitivity, -1.1, 0.55)
-	var running := (Input.is_physical_key_pressed(KEY_SHIFT) or Input.is_joy_button_pressed(0, JOY_BUTTON_RIGHT_SHOULDER)) and input_dir != Vector2.ZERO
+	var running := (Input.is_physical_key_pressed(KEY_SHIFT) or Input.is_joy_button_pressed(0, JOY_BUTTON_RIGHT_SHOULDER) or touch_run) and input_dir != Vector2.ZERO
 	var spd := (run_speed if running else walk_speed) * speed_factor
 	var basis_yaw := Basis(Vector3.UP, _yaw)
 	var dir3 := (basis_yaw * Vector3(input_dir.x, 0, input_dir.y))

@@ -122,6 +122,15 @@ var _audio_music: AudioStreamPlayer = null
 var _audio_sfx: AudioStreamPlayer = null
 var _audio_streams: Dictionary = {}
 var _audio_muted: bool = false
+# Fix round (user play feedback): quality profile, opt-in footsteps,
+# creation-screen gating, mobile-build detection.
+var _quality: String = "High" # High / Medium / Low (Settings)
+var _footsteps_on: bool = false # footsteps default OFF (user complaint)
+var _creation_open: bool = false # world sim is gated while true
+var _mobile_build: bool = false # Android build only (preset feature/OS)
+var _touch_test: bool = false
+var _create_preset_btns: Array = []
+var _create_preset_info: Label = null
 var _text_size: int = 20
 var _cam_sensitivity: float = 1.0
 var _keybinds: Dictionary = {}
@@ -130,6 +139,10 @@ var _settings_panel: PanelContainer = null
 var _settings_bind_btns: Dictionary = {}
 var _grade_applied: bool = false
 var _fps_probe: bool = false
+var _draw_probe: bool = false # fix round: fast frame-counted draw-call probe
+var _draw_frames: int = 0
+var _draw_max: int = 0
+var _draw_obj_max: int = 0
 var _fps_frames: int = 0
 var _fps_time: float = 0.0
 var _fps_cam: Camera3D = null
@@ -192,7 +205,6 @@ var _save_panel: PanelContainer
 var _create_panel: PanelContainer
 var _create_name: LineEdit
 var _create_major: OptionButton
-var _create_appear: OptionButton
 var _mission_panel: PanelContainer
 var _mission_label: Label
 var _qa_panel: PanelContainer
@@ -225,6 +237,13 @@ func _ready() -> void:
 	# Phase 5: renderer branch + settings load before anything is built.
 	_forward_plus = str(ProjectSettings.get_setting("rendering/renderer/rendering_method")) == "forward_plus"
 	_fps_probe = args.has("--fps-probe")
+	_draw_probe = args.has("--draw-probe")
+	_touch_test = args.has("--touch-test")
+	# Item 6: the mobile version is a SEPARATE build of this one
+	# project — the Android export preset sets the "mobile" feature
+	# tag, and only that build ever enables the touch layer or the
+	# mobile quality defaults. Desktop builds never see them.
+	_mobile_build = OS.has_feature("mobile") or OS.get_name() == "Android" or _touch_test
 	_keybinds = {"interact": KEY_E, "phone": KEY_TAB, "classmates": KEY_C}
 	_p5_load_settings()
 	if _semester_mode:
@@ -244,10 +263,25 @@ func _ready() -> void:
 	_build_audio()
 	_p5_apply_text_size()
 	_p5_apply_audio_mute()
+	_apply_quality()
 	_init_phase2()
 	_p4_weather = Phase4Data.weather_for_day(day)
 	_p4_refresh_dorm_decor()
-	if _fps_probe:
+	if _draw_probe:
+		# Fix round draw-call probe: fixed camera at the Phase 5 orbit's
+		# start viewpoint (0, 9, 42) looking at the quad centre, sample
+		# RENDERING_INFO totals over ~55 rendered frames, print, quit.
+		# Frame-counted (not timed) so it terminates under llvmpipe.
+		_player.global_position = Vector3(-130, 0, 100)
+		_fps_cam = Camera3D.new()
+		_fps_cam.fov = 60.0
+		add_child(_fps_cam)
+		_fps_cam.global_position = Vector3(0, 9, 42)
+		_fps_cam.look_at(Vector3(0, 2, 0), Vector3.UP)
+		_fps_cam.current = true
+		_update_sun()
+		print("[DRAW_PROBE] starting (renderer=", ProjectSettings.get_setting("rendering/renderer/rendering_method"), ")")
+	elif _fps_probe:
 		# Phase 5 FPS probe: a 20 s orbit over the live campus, then a
 		# printed average + draw-call count. NPCs keep walking; the clock
 		# is frozen by the probe's early return in _process.
@@ -323,7 +357,7 @@ func _build_environment() -> void:
 	_sun.light_energy = 1.1
 	_sun.shadow_blur = 1.6
 	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-	_sun.directional_shadow_max_distance = 300.0
+	_sun.directional_shadow_max_distance = 180.0 # fix round: 300 m shadow camera was a major Forward+ cost
 	add_child(_sun)
 	# soft sky-bounce fill from the opposite side (no shadows)
 	var fill := DirectionalLight3D.new()
@@ -460,6 +494,7 @@ func _spawn_people() -> void:
 		npc.setup(d, false, sd["pos"], 1.4)
 		npc.stationary = true
 		npc.is_staff = true
+		npc.set_rig_lod(110.0)
 		npc.current_zone = sd["zone"]
 		npc.target_zone = sd["zone"]
 		_all_npcs.append(npc)
@@ -484,6 +519,7 @@ func _spawn_teachers() -> void:
 		var zone: String = _segment_for(d, 7.5)
 		var npc := _npc_common(d, false, zone, _all_npcs.size() + 1)
 		npc.is_teacher = true
+		npc.set_rig_lod(130.0)
 		npc.subject = str(td["subject"])
 		npc.friendship = 25
 		npc._label.modulate = Color(1.0, 0.85, 0.35) # gold labels mark faculty
@@ -510,7 +546,18 @@ func _init_phase2() -> void:
 		return # defaults only; no creation panel in automated runs
 	_player.controls_locked = true
 	_create_panel.visible = true
+	_set_creation_open(true)
 	_show_mission("Welcome to Northbridge!", "Create your student: name, major and look — then start your semester.")
+
+func _set_creation_open(on: bool) -> void:
+	# Fix round (item 4): opening the creation panel freezes the world
+	# sim (NPCs sim_paused, _process early-returns) and guarantees the
+	# mouse stays VISIBLE for the name field and preset buttons.
+	_creation_open = on
+	for n in _all_npcs:
+		(n as NPC).sim_paused = on
+	if on:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func _apply_major(major: String) -> void:
 	player_major = major
@@ -626,6 +673,26 @@ func _p4_apply_tiers(force_real: bool = false) -> void:
 			npc.set_path(_path_to(npc.global_position, npc.target_zone, npc.spot))
 
 func _process(delta: float) -> void:
+	if _draw_probe:
+		_draw_frames += 1
+		if _draw_frames >= 40:
+			_draw_max = maxi(_draw_max, RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME))
+			_draw_obj_max = maxi(_draw_obj_max, RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_OBJECTS_IN_FRAME))
+		if _draw_frames >= 55:
+			print("[DRAW_PROBE] draw_calls=", _draw_max, " objects=", _draw_obj_max, " primitives=", RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME))
+			get_tree().quit(0)
+		return
+	if _creation_open:
+		# Fix round (item 4): while the creation panel is open the world
+		# is a backdrop only — the clock does not advance, schedules do
+		# not run, NPCs are sim_paused (see npc.gd), and no ambient
+		# systems fire. This kills the creation-screen lag.
+		_update_sun()
+		_ui_timer -= delta
+		if _ui_timer <= 0.0:
+			_ui_timer = 0.5
+			_refresh_hud()
+		return
 	if _fps_probe:
 		# Phase 5 FPS probe: orbit the quad for 20 s, then report the
 		# average frame rate + draw calls and quit. NPCs animate on their
@@ -682,8 +749,10 @@ func _process(delta: float) -> void:
 		_refresh_hud()
 		if not _test_mode and not _capture_mode:
 			_p5_cull_labels()
-	# Phase 5 footsteps: one soft thud per ~2.4 m walked (real play only).
-	if not _test_mode and not _capture_mode and not paused and _player != null:
+	# Fix round (item 2): footsteps are OFF by default — the user found
+	# the procedural thud annoying. They only sound when the player
+	# explicitly enables them in Settings, and then much softer.
+	if _footsteps_on and not _test_mode and not _capture_mode and not paused and _player != null:
 		if not _foot_init:
 			_last_player_pos = _player.global_position
 			_foot_init = true
@@ -711,16 +780,112 @@ func _finish_test() -> void:
 	print("[TEST_PASS] Day rolled over to Day ", day, ". Mains=", _mains.size(), " BG=", _bgs.size(), " NPCs that physically arrived at scheduled zones during test: ", arrived)
 	for n in _mains:
 		print("[TEST_MAIN] ", (n as NPC).data["name"], " zone=", (n as NPC).target_zone)
+	var fix_ok := _run_fix_tests()
 	var p2_ok := _run_phase2_tests()
 	var p3_ok := _run_phase3_tests()
 	var p4_ok := _run_phase4_tests()
 	var p5_ok := _run_phase5_tests()
 	var sem_ok := false
-	if p2_ok and p3_ok and p4_ok and p5_ok:
+	if fix_ok and p2_ok and p3_ok and p4_ok and p5_ok:
 		sem_ok = _run_semester_harness()
 	else:
-		print("[TEST_P4_SEM] skipped: earlier phase tests failed (p2=", p2_ok, " p3=", p3_ok, " p4=", p4_ok, " p5=", p5_ok, ")")
-	get_tree().quit(0 if (p2_ok and p3_ok and p4_ok and p5_ok and sem_ok) else 1)
+		print("[TEST_P4_SEM] skipped: earlier phase tests failed (fix=", fix_ok, " p2=", p2_ok, " p3=", p3_ok, " p4=", p4_ok, " p5=", p5_ok, ")")
+	get_tree().quit(0 if (fix_ok and p2_ok and p3_ok and p4_ok and p5_ok and sem_ok) else 1)
+
+func _run_fix_tests() -> bool:
+	# User play-feedback fix round: signboards are boarded, statics are
+	# merged, footsteps default OFF, quality profiles bite, the
+	# creation gate freezes the sim, the chosen character preset
+	# applies and round-trips through a save, and the touch layer
+	# exists exactly in the mobile build.
+	var ok := true
+	print("[TEST_FIX] sign_board_count=", World.sign_board_count, " merged_statics=", World.merged_statics_from, "->", World.merged_statics_into)
+	if World.sign_board_count <= 0:
+		print("[TEST_FIX_FAIL] no boarded signs were built")
+		ok = false
+	if World.merged_statics_from < 500:
+		print("[TEST_FIX_FAIL] merge-by-material merged too few instances: ", World.merged_statics_from)
+		ok = false
+	if _footsteps_on:
+		print("[TEST_FIX_FAIL] footsteps must default OFF")
+		ok = false
+	# Quality profiles actually change rendering state.
+	_apply_quality()
+	var keep_q := _quality
+	_quality = "Low"
+	_apply_quality()
+	if _sun.shadow_enabled:
+		print("[TEST_FIX_FAIL] Low quality must disable sun shadows")
+		ok = false
+	_quality = "High"
+	_apply_quality()
+	if not _sun.shadow_enabled:
+		print("[TEST_FIX_FAIL] High quality must re-enable sun shadows")
+		ok = false
+	_quality = keep_q
+	_apply_quality()
+	# Creation gate freezes the NPC sim.
+	_set_creation_open(true)
+	if not _creation_open:
+		print("[TEST_FIX_FAIL] creation flag not set")
+		ok = false
+	for n in _mains:
+		if not (n as NPC).sim_paused:
+			print("[TEST_FIX_FAIL] NPC not sim_paused during creation: ", (n as NPC).data["name"])
+			ok = false
+			break
+	_set_creation_open(false)
+	for n in _mains:
+		if (n as NPC).sim_paused:
+			print("[TEST_FIX_FAIL] NPC still sim_paused after creation closed")
+			ok = false
+			break
+	print("[TEST_FIX] creation gate + quality + footsteps default: checked")
+	# Character preset: choose preset 5, verify it applies to the
+	# player model config and round-trips through a real save slot.
+	var keep_idx := _appearance_idx
+	_appearance_idx = 5
+	_apply_preset_to_player(5)
+	var cfg5 := _p4_player_cfg()
+	var pr5: Dictionary = Phase2Data.appearance_presets()[5]
+	if cfg5.get("shirt") != pr5["shirt"] or cfg5.get("hair_style") != pr5["hair_style"] or cfg5.get("female") != pr5["female"]:
+		print("[TEST_FIX_FAIL] preset 5 did not apply to the player config: ", cfg5)
+		ok = false
+	var st := _collect_state()
+	if int(st.get("appearance", -1)) != 5:
+		print("[TEST_FIX_FAIL] chosen preset not in collected state")
+		ok = false
+	var saved := SaveSystem.save(3, st)
+	var loaded := SaveSystem.load_slot(3)
+	if not saved or loaded.is_empty():
+		print("[TEST_FIX_FAIL] preset save/load round-trip failed")
+		ok = false
+	else:
+		_apply_state(loaded)
+		if _appearance_idx != 5:
+			print("[TEST_FIX_FAIL] preset did not survive save/load: idx=", _appearance_idx)
+			ok = false
+		else:
+			print("[TEST_FIX] preset 5 (", str(pr5["name"]), ") applied + save round-trip: OK")
+	_appearance_idx = keep_idx
+	_apply_preset_to_player(keep_idx)
+	# Touch layer: present exactly when this is the mobile build.
+	var touch_ok := (_touch_ui != null) == _mobile_build
+	if _mobile_build and _touch_ui != null:
+		var btns := 0
+		for c in _touch_ui.get_children():
+			if c is Button:
+				btns += 1
+		print("[TEST_TOUCH] mobile_build=", _mobile_build, " touch_buttons=", btns)
+		if btns < 5:
+			touch_ok = false
+	else:
+		print("[TEST_TOUCH] mobile_build=", _mobile_build, " touch_ui=", _touch_ui != null)
+	if not touch_ok:
+		print("[TEST_FIX_FAIL] touch layer gating wrong for this build")
+		ok = false
+	print("[TEST_FIX] RESULT: ", "PASS" if ok else "FAIL")
+	return ok
 
 func _run_phase2_tests() -> bool:
 	# Phase 2 headless evidence: teachers present, dialogue sampling
@@ -973,8 +1138,22 @@ func _update_interaction_prompt() -> void:
 		return
 	_prompt_label.text = ""
 
+func _any_overlay_open() -> bool:
+	# Fix round (item 4): gameplay mouse capture must never fire while
+	# ANY UI overlay is up — the old code only exempted dialogue, so
+	# clicking the name field on the creation screen (or a phone tab)
+	# captured the mouse and the cursor vanished.
+	if _creation_open or _current_npc != null:
+		return true
+	for p in [_phone_panel, _save_panel, _shop_panel, _qa_panel, _settings_panel, _class_panel, _dialog_panel]:
+		if p != null and (p as Control).visible:
+			return true
+	return false
+
 func _input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed and _current_npc == null and not _capture_mode:
+	if _any_overlay_open() and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE # safety net
+	if event is InputEventMouseButton and event.pressed and not _capture_mode and not _any_overlay_open():
 		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	# Phase 5: gamepad basics (left stick move / right stick look live in
@@ -990,7 +1169,7 @@ func _input(event: InputEvent) -> void:
 					_set_phone_tab(_phone_tab)
 		elif jb.button_index == JOY_BUTTON_BACK:
 			_class_panel.visible = not _class_panel.visible
-	if event is InputEventScreenTouch and not _capture_mode and not _test_mode:
+	if event is InputEventScreenTouch and _mobile_build and not _capture_mode and not _test_mode:
 		var st := event as InputEventScreenTouch
 		if not _touch_mode:
 			_touch_mode = true
@@ -1002,7 +1181,7 @@ func _input(event: InputEvent) -> void:
 				_touch_stick_idx = st.index
 				_touch_stick_origin = st.position
 				if _touch_knob != null:
-					_touch_knob.position = Vector2(40, 40)
+					_touch_knob.position = Vector2(47, 47)
 			elif st.position.x >= vw * 0.5 and _touch_look_idx == -1:
 				_touch_look_idx = st.index
 		else:
@@ -1010,10 +1189,10 @@ func _input(event: InputEvent) -> void:
 				_touch_stick_idx = -1
 				_player.touch_dir = Vector2.ZERO
 				if _touch_knob != null:
-					_touch_knob.position = Vector2(40, 40)
+					_touch_knob.position = Vector2(47, 47)
 			if st.index == _touch_look_idx:
 				_touch_look_idx = -1
-	if event is InputEventScreenDrag and not _capture_mode and not _test_mode:
+	if event is InputEventScreenDrag and _mobile_build and not _capture_mode and not _test_mode:
 		var sd := event as InputEventScreenDrag
 		if sd.index == _touch_stick_idx:
 			var v := (sd.position - _touch_stick_origin) / 55.0
@@ -1021,7 +1200,7 @@ func _input(event: InputEvent) -> void:
 				v = v.normalized()
 			_player.touch_dir = v
 			if _touch_knob != null:
-				_touch_knob.position = Vector2(40, 40) + v * 32.0
+				_touch_knob.position = Vector2(47, 47) + v * 40.0
 		elif sd.index == _touch_look_idx:
 			_player.apply_look(sd.relative.x * 1.5, sd.relative.y * 1.5)
 	if event is InputEventKey and event.pressed and not event.echo:
@@ -1702,10 +1881,8 @@ func _apply_state(state: Dictionary) -> void:
 		npc.target_zone = zone
 		npc.set_path([])
 	# Rebuild the player model for a restored appearance choice.
-	var presets := Phase2Data.appearance_presets()
-	if _appearance_idx >= 0 and _appearance_idx < presets.size():
-		var pr: Dictionary = presets[_appearance_idx]
-		_player.apply_appearance({"height": 1.74, "build": 1.0, "skin": pr["skin"], "hair_style": pr["hair_style"], "hair_color": Color(0.07, 0.05, 0.04), "shirt": pr["shirt"], "pants": Color(0.20, 0.22, 0.35), "female": pr["female"], "backpack": true, "pack_color": Color(0.25, 0.25, 0.28)})
+	if _appearance_idx >= 0 and _appearance_idx < Phase2Data.appearance_presets().size():
+		_apply_preset_to_player(_appearance_idx)
 	# Phase 4: re-apply a saved custom outfit/hairstyle on top of the
 	# preset rebuild above, and rebuild the placed dorm décor.
 	_p4_after_load()
@@ -1726,17 +1903,58 @@ func _load_slot_pressed(slot: int) -> void:
 	_apply_state(SaveSystem.load_slot(slot))
 	_show_toast("Loaded slot %d — Day %d." % [slot, day])
 
+func _apply_preset_to_player(idx: int) -> void:
+	# Fix round (item 5): the single place a character preset becomes
+	# the player's visible model — used by the creation grid (live
+	# preview), the start button, and save/load restore.
+	var presets := Phase2Data.appearance_presets()
+	var pr: Dictionary = presets[clampi(idx, 0, presets.size() - 1)]
+	_player.apply_appearance({"height": 1.74, "build": 1.0, "skin": pr["skin"], "hair_style": pr["hair_style"], "hair_color": Color(0.07, 0.05, 0.04), "shirt": pr["shirt"], "pants": Color(0.20, 0.22, 0.35), "female": pr["female"], "backpack": true, "pack_color": Color(0.25, 0.25, 0.28)})
+
+func _overlay_style() -> StyleBoxFlat:
+	# Fix round: opaque professional panel style shared by the HUD,
+	# creation and settings panels (the project's default panel style
+	# is translucent, which hurt readability on exactly the screens the
+	# user complained about).
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.07, 0.09, 0.13, 0.96)
+	sb.set_corner_radius_all(12)
+	sb.set_content_margin_all(14)
+	sb.border_color = Color(1, 1, 1, 0.18)
+	sb.set_border_width_all(1)
+	return sb
+
+func _create_preset_chosen(idx: int) -> void:
+	_appearance_idx = idx
+	var presets := Phase2Data.appearance_presets()
+	for i in range(_create_preset_btns.size()):
+		var b := _create_preset_btns[i] as Button
+		b.set_pressed_no_signal(i == idx)
+		b.text = ("✔ " if i == idx else "") + str(presets[i]["name"])
+		if i == idx:
+			var hl := StyleBoxFlat.new()
+			hl.bg_color = Color(0.15, 0.35, 0.65, 1.0)
+			hl.set_corner_radius_all(6)
+			hl.set_content_margin_all(8)
+			b.add_theme_stylebox_override("normal", hl)
+			b.add_theme_stylebox_override("pressed", hl)
+		else:
+			b.remove_theme_stylebox_override("normal")
+			b.remove_theme_stylebox_override("pressed")
+	if _create_preset_info != null and idx >= 0 and idx < presets.size():
+		_create_preset_info.text = "Selected: %s — %s" % [str(presets[idx]["name"]), str(presets[idx]["label"])]
+	_apply_preset_to_player(idx) # live preview on the model behind the panel
+
 func _create_start_pressed() -> void:
 	var nm := _create_name.text.strip_edges()
 	if nm != "":
 		player_name = nm
 	var majors := Phase2Data.majors()
 	player_major = majors[_create_major.selected]
-	_appearance_idx = _create_appear.selected
-	var pr: Dictionary = Phase2Data.appearance_presets()[_appearance_idx]
-	_player.apply_appearance({"height": 1.74, "build": 1.0, "skin": pr["skin"], "hair_style": pr["hair_style"], "hair_color": Color(0.07, 0.05, 0.04), "shirt": pr["shirt"], "pants": Color(0.20, 0.22, 0.35), "female": pr["female"], "backpack": true, "pack_color": Color(0.25, 0.25, 0.28)})
+	_apply_preset_to_player(_appearance_idx)
 	_apply_major(player_major)
 	_create_panel.visible = false
+	_set_creation_open(false)
 	_player.controls_locked = false
 	_show_mission("Semester started!", "%s — %s. Your lectures are in %s with %s. Check your phone (Tab)." % [player_name, player_major, str(Phase2Data.major_info(player_major)["block_name"]), str(Phase2Data.major_info(player_major)["teacher"])])
 	_add_message("Northbridge Admin", "Student record created: %s, %s. Good luck this semester!" % [player_name, player_major])
@@ -3614,12 +3832,21 @@ void fragment() {
 		grade.material = shmat
 		layer.add_child(grade)
 		_grade_applied = true
-	# top-left status panel
+	# top-left status panel — fix round (item 3): clean professional
+	# panel (rounded corners, even padding, subtle border) instead of
+	# the default flat grey box.
 	var panel := PanelContainer.new()
 	panel.position = Vector2(14, 12)
+	var psb := StyleBoxFlat.new()
+	psb.bg_color = Color(0.07, 0.09, 0.13, 0.82)
+	psb.set_corner_radius_all(10)
+	psb.set_content_margin_all(12)
+	psb.border_color = Color(1, 1, 1, 0.16)
+	psb.set_border_width_all(1)
+	panel.add_theme_stylebox_override("panel", psb)
 	layer.add_child(panel)
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 2)
+	vb.add_theme_constant_override("separation", 4)
 	panel.add_child(vb)
 	_hud_day = _mk_label("Day 1 • Week 1 of 12", 20, Color(1.0, 0.95, 0.75))
 	_hud_clock = _mk_label("07:30", 30)
@@ -3635,7 +3862,8 @@ void fragment() {
 	_hud_energy.min_value = 0
 	_hud_energy.max_value = 100
 	_hud_energy.value = energy
-	_hud_energy.custom_minimum_size = Vector2(150, 16)
+	_hud_energy.custom_minimum_size = Vector2(170, 15)
+	_hud_energy.add_theme_font_size_override("font_size", 11)
 	erow.add_child(_hud_energy)
 	vb.add_child(erow)
 	# Phase 2 HUD: GPA / health / stress / social / objective
@@ -3647,7 +3875,8 @@ void fragment() {
 	_hud_health.min_value = 0
 	_hud_health.max_value = 100
 	_hud_health.value = health
-	_hud_health.custom_minimum_size = Vector2(150, 14)
+	_hud_health.custom_minimum_size = Vector2(170, 14)
+	_hud_health.add_theme_font_size_override("font_size", 11)
 	hrow.add_child(_hud_health)
 	vb.add_child(hrow)
 	var srow := HBoxContainer.new()
@@ -3656,14 +3885,15 @@ void fragment() {
 	_hud_stress.min_value = 0
 	_hud_stress.max_value = 100
 	_hud_stress.value = stress
-	_hud_stress.custom_minimum_size = Vector2(150, 14)
+	_hud_stress.custom_minimum_size = Vector2(170, 14)
+	_hud_stress.add_theme_font_size_override("font_size", 11)
 	srow.add_child(_hud_stress)
 	vb.add_child(srow)
 	_hud_social = _mk_label("Social 50", 16, Color(0.8, 0.9, 1.0))
 	vb.add_child(_hud_social)
 	_hud_objective = _mk_label("🎯 Orientation: talk to a teacher", 15, Color(1.0, 0.85, 0.3))
 	_hud_objective.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_hud_objective.custom_minimum_size = Vector2(280, 0)
+	_hud_objective.custom_minimum_size = Vector2(262, 0)
 	vb.add_child(_hud_objective)
 	# top-right buttons
 	var bb := HBoxContainer.new()
@@ -3913,9 +4143,10 @@ void fragment() {
 	shv.add_child(shclose)
 	# ---- Character creation panel (normal play only) ----
 	_create_panel = PanelContainer.new()
+	_create_panel.add_theme_stylebox_override("panel", _overlay_style())
 	_create_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_create_panel.position = Vector2(-280, -240)
-	_create_panel.custom_minimum_size = Vector2(560, 480)
+	_create_panel.position = Vector2(-310, -300)
+	_create_panel.custom_minimum_size = Vector2(620, 600)
 	_create_panel.visible = false
 	layer.add_child(_create_panel)
 	var cv := VBoxContainer.new()
@@ -3925,22 +4156,46 @@ void fragment() {
 	cv.add_child(_mk_label("Your name:", 16))
 	_create_name = LineEdit.new()
 	_create_name.placeholder_text = "e.g. Aarav Sharma"
-	_create_name.custom_minimum_size = Vector2(500, 32)
+	_create_name.custom_minimum_size = Vector2(560, 36)
 	cv.add_child(_create_name)
 	cv.add_child(_mk_label("Your major (decides your lecture block + professor):", 16))
 	_create_major = OptionButton.new()
+	_create_major.custom_minimum_size = Vector2(560, 36)
 	for m in Phase2Data.majors():
 		_create_major.add_item(m)
 	cv.add_child(_create_major)
-	cv.add_child(_mk_label("Appearance:", 16))
-	_create_appear = OptionButton.new()
+	# Fix round (item 5): choose your MAIN CHARACTER — a grid of named
+	# appearance presets (both rigs, varied skin tones / hairstyles /
+	# outfits). Tapping one marks it selected AND live-previews it on
+	# the player model standing behind the panel.
+	cv.add_child(_mk_label("Choose your main character:", 16))
+	_create_preset_btns = []
+	var pgrid := GridContainer.new()
+	pgrid.columns = 2
+	pgrid.add_theme_constant_override("h_separation", 8)
+	pgrid.add_theme_constant_override("v_separation", 8)
+	cv.add_child(pgrid)
+	var pidx := 0
 	for pr in Phase2Data.appearance_presets():
-		_create_appear.add_item(str(pr["label"]))
-	cv.add_child(_create_appear)
+		var pb := Button.new()
+		pb.text = str(pr["name"])
+		pb.toggle_mode = true
+		pb.custom_minimum_size = Vector2(272, 48)
+		pb.add_theme_font_size_override("font_size", 15)
+		pb.pressed.connect(_create_preset_chosen.bind(pidx))
+		pgrid.add_child(pb)
+		_create_preset_btns.append(pb)
+		pidx += 1
+	_create_preset_info = _mk_label("", 14, Color(0.85, 0.9, 1.0))
+	_create_preset_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_create_preset_info.custom_minimum_size = Vector2(560, 0)
+	cv.add_child(_create_preset_info)
 	var start_btn := Button.new()
 	start_btn.text = "▶ Start Semester"
+	start_btn.custom_minimum_size = Vector2(560, 44)
 	start_btn.pressed.connect(func() -> void: _create_start_pressed())
 	cv.add_child(start_btn)
+	_create_preset_chosen(0)
 	# ---- Mission popup (GTA-style quest popups) ----
 	_mission_panel = PanelContainer.new()
 	_mission_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
@@ -4063,23 +4318,57 @@ func _refresh_classmates() -> void:
 
 func _p5_load_settings() -> void:
 	var cfg := ConfigFile.new()
-	if cfg.load("user://campus_settings.cfg") != OK:
-		return
-	_text_size = int(cfg.get_value("settings", "text_size", _text_size))
-	_cam_sensitivity = float(cfg.get_value("settings", "camera_sensitivity", _cam_sensitivity))
-	_audio_muted = bool(cfg.get_value("settings", "muted", _audio_muted))
-	for action in ["interact", "phone", "classmates"]:
-		if cfg.has_section_key("settings", "key_" + action):
-			_keybinds[action] = int(cfg.get_value("settings", "key_" + action))
+	var loaded := cfg.load("user://campus_settings.cfg") == OK
+	if loaded:
+		_text_size = int(cfg.get_value("settings", "text_size", _text_size))
+		_cam_sensitivity = float(cfg.get_value("settings", "camera_sensitivity", _cam_sensitivity))
+		_audio_muted = bool(cfg.get_value("settings", "muted", _audio_muted))
+		_quality = str(cfg.get_value("settings", "quality", _quality))
+		_footsteps_on = bool(cfg.get_value("settings", "footsteps", _footsteps_on))
+		for action in ["interact", "phone", "classmates"]:
+			if cfg.has_section_key("settings", "key_" + action):
+				_keybinds[action] = int(cfg.get_value("settings", "key_" + action))
+	if _mobile_build:
+		# Item 6: the Android build ships with mobile defaults (Low
+		# quality, larger text) unless the player saved their own.
+		if not loaded or not cfg.has_section_key("settings", "quality"):
+			_quality = "Low"
+		if not loaded or not cfg.has_section_key("settings", "text_size"):
+			_text_size = 22
 
 func _p5_save_settings() -> void:
 	var cfg := ConfigFile.new()
 	cfg.set_value("settings", "text_size", _text_size)
 	cfg.set_value("settings", "camera_sensitivity", _cam_sensitivity)
 	cfg.set_value("settings", "muted", _audio_muted)
+	cfg.set_value("settings", "quality", _quality)
+	cfg.set_value("settings", "footsteps", _footsteps_on)
 	for action in ["interact", "phone", "classmates"]:
 		cfg.set_value("settings", "key_" + action, int(_keybinds.get(action, KEY_E)))
 	cfg.save("user://campus_settings.cfg")
+
+func _apply_quality() -> void:
+	# Fix round (item 1): the Settings quality profile ACTUALLY changes
+	# rendering cost. High = the full PC look (Forward+ GI/bloom on the
+	# Windows build, 180 m shadows, MSAA 2x). Medium halves the shadow
+	# camera and drops GI/bloom/MSAA. Low turns sun shadows off
+	# entirely (the shadow pass is a second draw of every caster).
+	if _sun != null:
+		match _quality:
+			"Low":
+				_sun.shadow_enabled = false
+			"Medium":
+				_sun.shadow_enabled = true
+				_sun.directional_shadow_max_distance = 110.0
+			_:
+				_sun.shadow_enabled = true
+				_sun.directional_shadow_max_distance = 180.0
+	if _env != null and _forward_plus:
+		_env.sdfgi_enabled = _quality == "High"
+		_env.glow_enabled = _quality == "High"
+	var vp := get_viewport()
+	if vp != null:
+		vp.msaa_3d = Viewport.MSAA_2X if _quality == "High" else Viewport.MSAA_DISABLED
 
 func _p5_apply_text_size() -> void:
 	# Text size governs the READING surfaces (dialogue, phone, prompts);
@@ -4134,9 +4423,12 @@ func _build_audio() -> void:
 func _p5_sfx(name: String) -> void:
 	if _test_mode or _capture_mode or _fps_probe or _audio_sfx == null:
 		return
+	if name == "footstep" and not _footsteps_on:
+		return # fix round: footsteps are opt-in only (Settings)
 	var s := _audio_streams.get(name) as AudioStream
 	if s == null:
 		return
+	_audio_sfx.volume_db = -16.0 if name == "footstep" else -2.0
 	_audio_sfx.stream = s
 	_audio_sfx.play()
 
@@ -4166,6 +4458,7 @@ func _p5_refresh_settings_labels() -> void:
 
 func _build_settings_panel(layer: CanvasLayer) -> void:
 	_settings_panel = PanelContainer.new()
+	_settings_panel.add_theme_stylebox_override("panel", _overlay_style())
 	_settings_panel.set_anchors_preset(Control.PRESET_CENTER)
 	_settings_panel.position = Vector2(-230, -230)
 	_settings_panel.custom_minimum_size = Vector2(460, 460)
@@ -4198,6 +4491,18 @@ func _build_settings_panel(layer: CanvasLayer) -> void:
 	mute.button_pressed = _audio_muted
 	mute.toggled.connect(func(on: bool) -> void: _audio_muted = on; _p5_apply_audio_mute(); _p5_save_settings())
 	v.add_child(mute)
+	var foot := CheckButton.new()
+	foot.text = "Footstep sounds (off by default)"
+	foot.button_pressed = _footsteps_on
+	foot.toggled.connect(func(on: bool) -> void: _footsteps_on = on; _p5_save_settings())
+	v.add_child(foot)
+	v.add_child(_mk_label("Graphics quality (applies immediately):", 16))
+	var qopt := OptionButton.new()
+	for qi in range(3):
+		qopt.add_item(["High", "Medium", "Low"][qi])
+	qopt.selected = ["High", "Medium", "Low"].find(_quality)
+	qopt.item_selected.connect(func(i: int) -> void: _quality = ["High", "Medium", "Low"][i]; _apply_quality(); _p5_save_settings())
+	v.add_child(qopt)
 	v.add_child(_mk_label("Remappable keys (click, then press a key):", 16))
 	for action in ["interact", "phone", "classmates"]:
 		var b := Button.new()
@@ -4206,48 +4511,81 @@ func _build_settings_panel(layer: CanvasLayer) -> void:
 		v.add_child(b)
 	_p5_refresh_settings_labels()
 	v.add_child(_mk_label("Gamepad: left stick move, right stick look, R-shoulder run, A interact, Start phone, Back classmates.", 14, Color(0.85, 0.9, 1.0)))
-	v.add_child(_mk_label("Touch: left-half joystick to move, right-half drag to look, on-screen Interact / Phone buttons.", 14, Color(0.85, 0.9, 1.0)))
+	v.add_child(_mk_label("Touch (mobile build only): left joystick to move, right-half drag to look, on-screen Interact / Phone / Mates / Run / Pause buttons.", 14, Color(0.85, 0.9, 1.0)))
 	var close := Button.new()
 	close.text = "Close"
 	close.pressed.connect(func() -> void: _settings_panel.visible = false; _rebind_target = "")
 	v.add_child(close)
 
 func _build_touch_ui(layer: CanvasLayer) -> void:
-	# Phase 5 touch basics. Hidden until the first real touch, so desktop
-	# play and screenshots are untouched. The joystick graphics ignore
-	# mouse input so touches still reach _input for the joystick logic.
+	# Item 6 (fix round): the touch layer exists ONLY in the mobile
+	# build (Android preset feature tag / --touch-test). The PC build
+	# never builds it at all — no hidden mobile UI on desktop. In the
+	# mobile build it is visible from the start: left-half joystick,
+	# right-half drag to look, big tap targets (>=64 px, font 17) for
+	# Interact / Phone / Classmates / Run (hold) / Pause.
+	if not _mobile_build:
+		_touch_ui = null
+		return
 	_touch_ui = Control.new()
 	_touch_ui.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_touch_ui.visible = false
+	_touch_ui.visible = true
 	_touch_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(_touch_ui)
 	_touch_base = ColorRect.new()
 	_touch_base.color = Color(1, 1, 1, 0.15)
 	_touch_base.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	_touch_base.position = Vector2(24, -160)
-	_touch_base.custom_minimum_size = Vector2(120, 120)
+	_touch_base.position = Vector2(24, -190)
+	_touch_base.custom_minimum_size = Vector2(150, 150)
 	_touch_base.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_touch_ui.add_child(_touch_base)
 	_touch_knob = ColorRect.new()
 	_touch_knob.color = Color(1, 1, 1, 0.5)
-	_touch_knob.position = Vector2(40, 40)
-	_touch_knob.custom_minimum_size = Vector2(40, 40)
+	_touch_knob.position = Vector2(47, 47)
+	_touch_knob.custom_minimum_size = Vector2(56, 56)
 	_touch_knob.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_touch_base.add_child(_touch_knob)
 	var b_interact := Button.new()
 	b_interact.text = "✋ Interact"
+	b_interact.add_theme_font_size_override("font_size", 17)
 	b_interact.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	b_interact.position = Vector2(-320, -120)
-	b_interact.custom_minimum_size = Vector2(140, 56)
+	b_interact.position = Vector2(-370, -100)
+	b_interact.custom_minimum_size = Vector2(170, 68)
 	b_interact.pressed.connect(func() -> void: _do_interact())
 	_touch_ui.add_child(b_interact)
 	var b_phone := Button.new()
 	b_phone.text = "📱 Phone"
+	b_phone.add_theme_font_size_override("font_size", 17)
 	b_phone.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	b_phone.position = Vector2(-160, -120)
-	b_phone.custom_minimum_size = Vector2(140, 56)
+	b_phone.position = Vector2(-190, -100)
+	b_phone.custom_minimum_size = Vector2(170, 68)
 	b_phone.pressed.connect(func() -> void: _phone_panel.visible = not _phone_panel.visible; if _phone_panel.visible: _set_phone_tab(_phone_tab))
 	_touch_ui.add_child(b_phone)
+	var b_class := Button.new()
+	b_class.text = "👥 Mates"
+	b_class.add_theme_font_size_override("font_size", 17)
+	b_class.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	b_class.position = Vector2(-370, -186)
+	b_class.custom_minimum_size = Vector2(170, 68)
+	b_class.pressed.connect(func() -> void: _class_panel.visible = not _class_panel.visible)
+	_touch_ui.add_child(b_class)
+	var b_run := Button.new()
+	b_run.text = "🏃 Run"
+	b_run.add_theme_font_size_override("font_size", 17)
+	b_run.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	b_run.position = Vector2(-190, -186)
+	b_run.custom_minimum_size = Vector2(170, 68)
+	b_run.button_down.connect(func() -> void: _player.touch_run = true)
+	b_run.button_up.connect(func() -> void: _player.touch_run = false)
+	_touch_ui.add_child(b_run)
+	var b_pause := Button.new()
+	b_pause.text = "⏸"
+	b_pause.add_theme_font_size_override("font_size", 20)
+	b_pause.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	b_pause.position = Vector2(-84, 12)
+	b_pause.custom_minimum_size = Vector2(72, 64)
+	b_pause.pressed.connect(func() -> void: paused = not paused; _show_toast("Paused" if paused else "Resumed"))
+	_touch_ui.add_child(b_pause)
 
 func _run_phase5_tests() -> bool:
 	# Phase 5 headless evidence: mannerisms assigned, audio files present,
@@ -4561,6 +4899,29 @@ func _run_captures() -> void:
 	_shot(cam, Vector3(0, 1.7, 28), Vector3(1, 1.5, 95))
 	await get_tree().create_timer(0.9).timeout
 	await _shot_file("shot22_golden_hour.png")
+	# ---- Fix-round shots ----
+	game_minutes = 10.0 * 60.0
+	_update_sun()
+	# shot23: creation screen — preset grid with labelled character
+	# choices and the live-previewed selection (capture mode bypasses
+	# the panel, so show it explicitly for this shot only; the mouse
+	# stays VISIBLE in real play via _set_creation_open — the OS cursor
+	# itself is not rendered into Godot screenshots).
+	_create_preset_chosen(2)
+	_create_panel.visible = true
+	_shot(cam, Vector3(0, 1.7, 28), Vector3(1, 1.5, 95))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot23_creation.png")
+	_create_panel.visible = false
+	# shot24/25: the reworked PARKING signboard — FRONT (readable text
+	# on an opaque board) and BACK (plain board, proving no mirrored
+	# text can ever be seen from behind).
+	_shot(cam, Vector3(-26, 2.3, 79.5), Vector3(-26, 3.0, 74.2))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot24_sign_front.png")
+	_shot(cam, Vector3(-26, 2.3, 69.0), Vector3(-26, 3.0, 74.2))
+	await get_tree().create_timer(0.9).timeout
+	await _shot_file("shot25_sign_back.png")
 	_player.global_position = Vector3(-130, 0, 100)
 	print("[CAPTURE] done")
 	get_tree().quit(0)

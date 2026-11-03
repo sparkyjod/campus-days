@@ -105,13 +105,19 @@ static func major_info(major: String) -> Dictionary:
 	return table.get(major, table["Computer Science"])
 
 static func appearance_presets() -> Array:
+	# Fix round (item 5): the player's MAIN CHARACTER choices — named
+	# appearance presets spanning both Blender rigs, varied skin tones,
+	# hairstyles and outfit colours. These are looks, not identities:
+	# none of them is one of the Ten NPCs.
 	return [
-		{"label": "Short black hair • Blue tee", "female": false, "hair_style": 0, "shirt": Color(0.16, 0.30, 0.62), "skin": Color(0.60, 0.42, 0.29)},
-		{"label": "Long hair • Maroon kurti", "female": true, "hair_style": 1, "shirt": Color(0.55, 0.15, 0.25), "skin": Color(0.66, 0.47, 0.33)},
-		{"label": "Spiky hair • Green tee", "female": false, "hair_style": 3, "shirt": Color(0.20, 0.65, 0.30), "skin": Color(0.52, 0.35, 0.23)},
-		{"label": "Bob cut • Pink top", "female": true, "hair_style": 5, "shirt": Color(0.85, 0.45, 0.55), "skin": Color(0.70, 0.52, 0.38)},
-		{"label": "Curly hair • Yellow tee", "female": false, "hair_style": 6, "shirt": Color(0.85, 0.75, 0.15), "skin": Color(0.58, 0.40, 0.27)},
-		{"label": "Braided hair • Teal top", "female": true, "hair_style": 2, "shirt": Color(0.20, 0.45, 0.40), "skin": Color(0.62, 0.43, 0.30)}
+		{"name": "Aarav — Campus Classic", "label": "Short black hair • Blue tee", "female": false, "hair_style": 0, "shirt": Color(0.16, 0.30, 0.62), "skin": Color(0.60, 0.42, 0.29)},
+		{"name": "Meera — Maroon Kurti", "label": "Long hair • Maroon kurti", "female": true, "hair_style": 1, "shirt": Color(0.55, 0.15, 0.25), "skin": Color(0.66, 0.47, 0.33)},
+		{"name": "Kabir — Spiky Green", "label": "Spiky hair • Green tee", "female": false, "hair_style": 3, "shirt": Color(0.20, 0.65, 0.30), "skin": Color(0.52, 0.35, 0.23)},
+		{"name": "Ananya — Bob & Pink", "label": "Bob cut • Pink top", "female": true, "hair_style": 5, "shirt": Color(0.85, 0.45, 0.55), "skin": Color(0.70, 0.52, 0.38)},
+		{"name": "Rohan — Curly Yellow", "label": "Curly hair • Yellow tee", "female": false, "hair_style": 6, "shirt": Color(0.85, 0.75, 0.15), "skin": Color(0.58, 0.40, 0.27)},
+		{"name": "Ishita — Braided Teal", "label": "Braided hair • Teal top", "female": true, "hair_style": 2, "shirt": Color(0.20, 0.45, 0.40), "skin": Color(0.62, 0.43, 0.30)},
+		{"name": "Arjun — Cap & Grey", "label": "Cap • Slate hoodie-grey tee", "female": false, "hair_style": 4, "shirt": Color(0.38, 0.42, 0.48), "skin": Color(0.56, 0.38, 0.25)},
+		{"name": "Sana — Wavy Rust", "label": "Wavy hair • Rust-orange top", "female": true, "hair_style": 6, "shirt": Color(0.78, 0.38, 0.18), "skin": Color(0.68, 0.50, 0.36)}
 	]
 
 # ---------------- jobs ----------------

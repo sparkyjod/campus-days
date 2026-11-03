@@ -111,14 +111,53 @@ static func _ground_plane(mat: Material, pos: Vector3, size: Vector2, rot_y: flo
 	mi.rotation.y = rot_y
 	_parent.add_child(mi)
 
-static func _sign(text: String, pos: Vector3, size_px: int = 96, color: Color = Color(1, 1, 1), rot_y: float = 0.0) -> void:
+static var sign_board_count: int = 0
+static var merged_statics_from: int = 0 # fix round: merge evidence for tests
+static var merged_statics_into: int = 0 # fix-round test evidence
+
+static func _sign(text: String, pos: Vector3, size_px: int = 96, color: Color = Color(1, 1, 1), rot_y: float = 0.0, boarded: bool = true, posts: bool = false) -> void:
+	# Fix round (user play feedback, item 3): professional signboards.
+	# The old naked Label3D (pixel_size 0.01, double-sided) rendered
+	# GIANT MIRRORED transparent letters when seen from behind. Now:
+	# an opaque backing board sized to the measured text sits behind
+	# the lettering, the label is single-sided (double_sided=false)
+	# so no mirrored text can ever appear, and pixel_size is small
+	# enough that signs read at normal distances without filling the
+	# screen. Callers that already build their own panel (building
+	# name plates, notice boards, signposts) pass boarded=false.
+	var px := 0.0042
+	var lines := text.split("\n")
+	var font: Font = ThemeDB.fallback_font
+	var tw := 0.0
+	for ln in lines:
+		var wpx := 0.0
+		if font != null:
+			wpx = font.get_string_size(ln, HORIZONTAL_ALIGNMENT_LEFT, -1.0, size_px).x
+		else:
+			wpx = ln.length() * size_px * 0.55
+		tw = maxf(tw, wpx * px)
+	var line_h := size_px * px * 1.18
+	var bw := clampf(tw + 0.55, 1.1, 9.5)
+	var bh := lines.size() * line_h + 0.30
+	var fwd := Vector3(sin(rot_y), 0, cos(rot_y))
+	if boarded:
+		var board_m := TexGen.mat_color(Color(0.10, 0.13, 0.20), 0.55)
+		_box(board_m, pos - fwd * 0.055, Vector3(bw, bh, 0.09), false, rot_y)
+		sign_board_count += 1
+		if posts:
+			var post_m := TexGen.mat_color(Color(0.22, 0.23, 0.26), 0.5)
+			var along := Vector3(cos(rot_y), 0, -sin(rot_y))
+			for sgn in [-1.0, 1.0]:
+				var pp: Vector3 = pos + along * (bw * 0.32 * sgn)
+				_cyl(post_m, Vector3(pp.x, (pos.y - bh * 0.5) * 0.5, pp.z), 0.055, pos.y - bh * 0.5, true)
 	var l := Label3D.new()
 	l.text = text
 	l.font_size = size_px
-	l.pixel_size = 0.01
+	l.pixel_size = px
+	l.double_sided = false
 	l.modulate = color
-	l.outline_size = 16
-	l.outline_modulate = Color(0, 0, 0, 0.65)
+	l.outline_size = 8
+	l.outline_modulate = Color(0, 0, 0, 0.55)
 	l.position = pos
 	l.rotation.y = rot_y
 	_parent.add_child(l)
@@ -304,7 +343,7 @@ static func _building(cfg: Dictionary) -> void:
 		var panel_w := clampf(name_text.length() * font_px * 0.0058 + 0.8, 2.2, face_w - 0.3)
 		var panel_h := 1.12 * clampf(face_w / 22.0, 0.34, 1.0) + 0.25
 		_box(TexGen.mat_color(Color(0.13, 0.16, 0.24), 0.5), sign_pos - out_dir * 0.10, Vector3(panel_w, panel_h, 0.14) if along.x != 0.0 else Vector3(0.14, panel_h, panel_w), false)
-		_sign(name_text, sign_pos, font_px, Color(1.0, 0.95, 0.80), rot)
+		_sign(name_text, sign_pos, font_px, Color(1.0, 0.95, 0.80), rot, false)
 
 static func _tree(pos: Vector3, scl: float = 1.0, shade: int = 0) -> void:
 	var trunk_m := TexGen.mat_tex(TexGen.tex_wood(), Color(0.8, 0.7, 0.6), Vector2(1, 2))
@@ -367,7 +406,7 @@ static func _notice_board(pos: Vector3, rot_y: float, lines: String) -> void:
 	var nb := _box(TexGen.mat_tex(TexGen.tex_wood(), Color.WHITE, Vector2(3, 2)), pos + Vector3(0, 1.5, 0), Vector3(3.4, 2.0, 0.18), true, rot_y)
 	nb.visibility_range_end = 130.0
 	var fwd := Vector3(sin(rot_y), 0, cos(rot_y))
-	_sign(lines, pos + Vector3(0, 1.6, 0) - fwd * 0.13, 54, Color(1.0, 0.97, 0.85), rot_y + PI)
+	_sign(lines, pos + Vector3(0, 1.6, 0) - fwd * 0.13, 54, Color(1.0, 0.97, 0.85), rot_y + PI, false)
 
 static func _signpost(pos: Vector3, entries: Array) -> void:
 	_cyl(TexGen.mat_color(Color(0.22, 0.23, 0.26), 0.5), pos + Vector3(0, 1.5, 0), 0.06, 3.0, true)
@@ -377,7 +416,7 @@ static func _signpost(pos: Vector3, entries: Array) -> void:
 		var rot: float = e[1]
 		_box(board_m, pos + Vector3(0, y, 0), Vector3(1.7, 0.34, 0.05), false, rot)
 		var fwd := Vector3(sin(rot), 0, cos(rot))
-		_sign(e[0], pos + Vector3(0, y + 0.01, 0) + fwd * 0.05, 44, Color(1, 1, 1), rot)
+		_sign(e[0], pos + Vector3(0, y + 0.01, 0) + fwd * 0.05, 44, Color(1, 1, 1), rot, false)
 		y -= 0.48
 
 static func _finalize_canopies() -> void:
@@ -406,6 +445,137 @@ static func _finalize_canopies() -> void:
 		inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		_parent.add_child(inst)
 	_tree_canopies = [[], [], []]
+
+static func _mesh_key(m: Mesh) -> String:
+	# Geometry identity for merge grouping: primitive meshes built with
+	# the same parameters are interchangeable (instance scale/rotation
+	# is baked into the merged vertices via the world transform).
+	if m is BoxMesh:
+		return "box"
+	if m is QuadMesh:
+		return "quad_%s" % str((m as QuadMesh).size)
+	if m is PlaneMesh:
+		return "plane_%s" % str((m as PlaneMesh).size)
+	if m is CylinderMesh:
+		var c := m as CylinderMesh
+		return "cyl_%f_%f_%f_%d" % [c.top_radius, c.bottom_radius, c.height, c.radial_segments]
+	if m is SphereMesh:
+		var s := m as SphereMesh
+		return "sph_%f_%f_%d_%d" % [s.radius, s.height, s.radial_segments, s.rings]
+	if m is TorusMesh:
+		var t := m as TorusMesh
+		return "tor_%f_%f" % [t.inner_radius, t.outer_radius]
+	if m is CapsuleMesh:
+		var cp := m as CapsuleMesh
+		return "cap_%f_%f" % [cp.radius, cp.height]
+	return "mesh_%d" % m.get_instance_id()
+
+static func _merge_statics() -> void:
+	# Fix round (user play feedback, item 1): merge-by-material for the
+	# static world. The builder emitted thousands of individual
+	# MeshInstance3D nodes (one per wall piece, window, bench slat,
+	# bicycle...), each costing a draw call in the main pass AND in the
+	# shadow pass. Here every static instance is baked into one
+	# ArrayMesh per (geometry, material, shadow-mode) group. Collision
+	# shapes live on a separate StaticBody3D and are untouched; nodes
+	# with a visibility range (Phase 5 LOD props) and shadow-off nodes
+	# (clouds) are excluded and keep their individual behaviour.
+	var all: Array = []
+	var stack: Array = [_parent]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		for c in n.get_children():
+			stack.append(c)
+		if n is MeshInstance3D:
+			all.append(n)
+	var groups: Dictionary = {}
+	for mi in all:
+		if mi.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_OFF:
+			continue
+		if mi.visibility_range_end > 0.0:
+			continue
+		if mi.mesh == null or mi.material_override == null:
+			continue
+		if mi.mesh.get_surface_count() != 1:
+			continue
+		var key := "%s|%d|%d" % [_mesh_key(mi.mesh), mi.material_override.get_instance_id(), mi.cast_shadow]
+		if not groups.has(key):
+			groups[key] = []
+		groups[key].append(mi)
+	var merged_from := 0
+	var merged_into := 0
+	for key in groups:
+		var items: Array = groups[key]
+		if items.size() < 2:
+			continue
+		var base: Array = (items[0].mesh as Mesh).surface_get_arrays(0)
+		var bverts: PackedVector3Array = base[Mesh.ARRAY_VERTEX]
+		if bverts.is_empty():
+			continue
+		var bnorms: PackedVector3Array = base[Mesh.ARRAY_NORMAL]
+		var buvs: PackedVector2Array = base[Mesh.ARRAY_TEX_UV]
+		var bidx: PackedInt32Array = base[Mesh.ARRAY_INDEX]
+		var btans: PackedFloat32Array = base[Mesh.ARRAY_TANGENT]
+		var verts := PackedVector3Array()
+		var norms := PackedVector3Array()
+		var uvs := PackedVector2Array()
+		var idxs := PackedInt32Array()
+		var tans := PackedFloat32Array()
+		for mi in items:
+			# Global transform accumulated manually up to _parent (Main
+			# sits at the origin), so bench-group rotations etc. bake
+			# correctly even before the first frame's transform flush.
+			var gt: Transform3D = mi.transform
+			var pn: Node = mi.get_parent()
+			while pn != null and pn is Node3D and pn != _parent:
+				gt = (pn as Node3D).transform * gt
+				pn = pn.get_parent()
+			var off := verts.size()
+			for i in range(bverts.size()):
+				verts.append(gt * bverts[i])
+				if not bnorms.is_empty():
+					norms.append((gt.basis * bnorms[i]).normalized())
+			uvs.append_array(buvs)
+			if not btans.is_empty():
+				for i in range(bverts.size()):
+					var tv := Vector3(btans[i * 4], btans[i * 4 + 1], btans[i * 4 + 2])
+					var tt := gt.basis * tv
+					tans.append(tt.x)
+					tans.append(tt.y)
+					tans.append(tt.z)
+					tans.append(btans[i * 4 + 3])
+			if bidx.is_empty():
+				for i in range(bverts.size()):
+					idxs.append(off + i)
+			else:
+				for i in range(bidx.size()):
+					idxs.append(off + bidx[i])
+		var arrays: Array = []
+		arrays.resize(Mesh.ARRAY_MAX)
+		arrays[Mesh.ARRAY_VERTEX] = verts
+		if not norms.is_empty():
+			arrays[Mesh.ARRAY_NORMAL] = norms
+		if not uvs.is_empty():
+			arrays[Mesh.ARRAY_TEX_UV] = uvs
+		if not tans.is_empty():
+			arrays[Mesh.ARRAY_TANGENT] = tans
+		arrays[Mesh.ARRAY_INDEX] = idxs
+		var am := ArrayMesh.new()
+		am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		var merged := MeshInstance3D.new()
+		merged.name = "MergedStatics"
+		merged.mesh = am
+		merged.material_override = (items[0] as MeshInstance3D).material_override
+		merged.cast_shadow = (items[0] as MeshInstance3D).cast_shadow
+		_parent.add_child(merged)
+		for mi in items:
+			mi.get_parent().remove_child(mi)
+			mi.queue_free()
+		merged_from += items.size()
+		merged_into += 1
+	merged_statics_from = merged_from
+	merged_statics_into = merged_into
+	print("[PERF] merge-by-material: ", merged_from, " static instances -> ", merged_into, " merged draws")
 
 static func build(parent: Node3D) -> Dictionary:
 	_parent = parent
@@ -520,7 +690,7 @@ static func build(parent: Node3D) -> Dictionary:
 		_box(TexGen.mat_color(Color(0.95, 0.55, 0.15) if fx < 0 else Color(0.15, 0.45, 0.25), 0.9), Vector3(fx + 0.45, 7.35, 100), Vector3(0.9, 0.55, 0.04), false)
 	_build_bus(Vector3(-11, 0, 90), 0.3)
 	_build_rickshaw(Vector3(10.5, 0, 86))
-	_sign("BUS STOP", Vector3(-11, 3.4, 95.5), 72, Color(1, 1, 1), PI)
+	_sign("BUS STOP", Vector3(-11, 3.4, 95.5), 72, Color(1, 1, 1), PI, true, true)
 	_build_bus_shelter(Vector3(-14.5, 0, 78))
 
 	# --- chai stall near quad south-east (+ umbrellas, tables, stools)
@@ -648,6 +818,7 @@ static func build(parent: Node3D) -> Dictionary:
 		["gate", "city_road"], ["city_road", "city_bus"], ["city_bus", "city_center"], ["city_center", "city_park"]
 	]
 	_finalize_canopies() # Phase 5: batch tree canopies into 3 MultiMesh draws
+	_merge_statics() # fix round: merge-by-material for all remaining statics
 	var astar := AStar3D.new()
 	var ids: Dictionary = {}
 	var nid := 0
@@ -909,7 +1080,7 @@ static func _build_city() -> void:
 	_tree(Vector3(-14, 0, 164), 1.0, 0)
 	_tree(Vector3(14, 0, 158), 1.1, 1)
 	_tree(Vector3(0, 0, 167), 0.95, 2)
-	_sign("MG ROAD PARK", Vector3(0, 2.2, 155.5), 60, Color(1, 1, 1), PI)
+	_sign("MG ROAD PARK", Vector3(0, 2.2, 155.5), 60, Color(1, 1, 1), PI, true, true)
 	# city street furniture + signs
 	for sp in [[Vector3(-20, 0, 132), Vector3(0, 0, 1)], [Vector3(20, 0, 140), Vector3(0, 0, -1)]]:
 		_street_pole(sp[0], sp[1])
@@ -925,7 +1096,7 @@ static func _build_city() -> void:
 	_box(TexGen.mat_color(Color(0.55, 0.57, 0.60), 0.35), Vector3(7, 2.72, 120), Vector3(5.8, 0.12, 2.0), false)
 	_box(TexGen.mat_tex(TexGen.tex_wood(), Color.WHITE, Vector2(2, 0.4)), Vector3(7, 0.55, 119.55), Vector3(4.6, 0.09, 0.4), false)
 	_build_bus(Vector3(0, 0, 119), PI / 2.0)
-	_sign("CITY BUS — Route 12 • MG Road Terminus", Vector3(7, 3.4, 118.5), 56, Color(1, 1, 1), 0.0)
+	_sign("CITY BUS — Route 12 • MG Road Terminus", Vector3(7, 3.4, 118.5), 56, Color(1, 1, 1), 0.0, true, true)
 
 static func _build_bus_shelter(pos: Vector3) -> void:
 	var g := Node3D.new()
@@ -942,7 +1113,7 @@ static func _build_bus_shelter(pos: Vector3) -> void:
 	_box(glass_m, Vector3(2.68, 1.35, 0), Vector3(0.04, 1.9, 1.6), false)
 	_box(TexGen.mat_color(Color(0.55, 0.57, 0.60), 0.35), Vector3(0, 2.72, 0), Vector3(5.8, 0.12, 2.0), false)
 	_box(TexGen.mat_tex(TexGen.tex_wood(), Color.WHITE, Vector2(2, 0.4)), Vector3(0, 0.55, -0.45), Vector3(4.6, 0.09, 0.4), false)
-	_sign("CITY BUS — Route 12 • University Gate", Vector3(0, 2.35, -0.9), 46, Color(1, 1, 1), PI)
+	_sign("CITY BUS — Route 12 • University Gate", Vector3(0, 2.35, -0.9), 46, Color(1, 1, 1), PI, false) # mounted on the shelter frame; single-sided now, so no mirrored text through the glass
 	_parent = saved
 	_add_box_shape(pos + Vector3(0, 1.0, -0.7), Vector3(5.6, 2.0, 0.4))
 
@@ -1093,7 +1264,7 @@ static func _build_parking() -> void:
 	var paint_m := TexGen.mat_color(Color(0.9, 0.9, 0.88), 0.8)
 	for i in range(4): # bay lines
 		_box(paint_m, Vector3(-36.0 + float(i) * 6.4, 0.034, 79), Vector3(0.14, 0.012, 9.0), false)
-	_sign("PARKING — Students & Staff", Vector3(-26, 3.1, 74.2), 64, Color(1, 1, 1), PI)
+	_sign("PARKING — Students & Staff", Vector3(-26, 3.1, 74.2), 64, Color(1, 1, 1), PI, true, true)
 	_cyl(TexGen.mat_color(Color(0.25, 0.26, 0.3), 0.5), Vector3(-33, 1.5, 74.2), 0.06, 3.0, true)
 	_cyl(TexGen.mat_color(Color(0.25, 0.26, 0.3), 0.5), Vector3(-19, 1.5, 74.2), 0.06, 3.0, true)
 	_build_car(Vector3(-32, 0, 79), 0.06, Color(0.72, 0.74, 0.78)) # silver hatchback
@@ -1195,7 +1366,7 @@ static func _build_sports() -> void:
 	for i in range(3):
 		_box(stand_m, Vector3(-86.0 - float(i) * 1.6, 0.5 + float(i) * 0.65, 62), Vector3(1.6, 1.0 + float(i) * 0.6, 30), true)
 		_box(stand_m, Vector3(-13.5 + float(i) * 1.6, 0.5 + float(i) * 0.65, 66), Vector3(1.6, 1.0 + float(i) * 0.6, 20), true)
-	_sign("SPORTS COMPLEX", Vector3(-84, 4.6, 62), 84, Color(1, 1, 1), -PI / 2.0)
+	_sign("SPORTS COMPLEX", Vector3(-84, 4.6, 62), 84, Color(1, 1, 1), -PI / 2.0, true, true)
 	# floodlight pylons (visual heads; no extra light nodes)
 	for fp in [Vector3(-80, 0, 44), Vector3(-24, 0, 44), Vector3(-80, 0, 80), Vector3(-24, 0, 80)]:
 		_cyl(TexGen.mat_color(Color(0.3, 0.3, 0.33), 0.5), fp + Vector3(0, 5.0, 0), 0.12, 10.0, true)

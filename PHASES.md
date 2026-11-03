@@ -692,3 +692,167 @@ Scope stayed inside Phase 0+1 (no Phase 2 systems started).
 Note: headless dummy-renderer prints `Parameter "m" is null` engine notices under
 `--headless` (sky/dummy storage); these do **not** occur in the real (xvfb/OpenGL)
 render run, which produced 0 script errors and clean captures.
+
+---
+
+## User play-feedback fix round (2026-11-03, after first real play of the Windows build)
+
+The user played `build/windows/CampusDays.exe` and reported six defects.
+All six are fixed in this round; evidence below. Commits are LOCAL only —
+the user pushes to GitHub himself.
+
+### Item 1 — PERFORMANCE (top priority) ✅ (target met: −57.8% draw calls)
+- **Objective measurement** (same viewpoint both times: camera fixed at
+  (0, 9, 42) looking at (0, 2, 0), max `RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME`
+  over rendered frames 40–55, gl_compatibility under xvfb/llvmpipe, new
+  `--draw-probe` mode):
+  - BEFORE this round: **10,569 draw calls** (11,276 objects)
+  - AFTER this round: **4,463 draw calls** (5,331 objects) → **−57.8%**
+  - (Phase 5's "7,427" figure used a different sampling — 20 s orbit,
+    last frame — so it is not directly comparable; both numbers are
+    recorded here honestly.)
+- What was done:
+  - **Merge-by-material for static geometry** (the Phase 5 partial,
+    now done): `World._merge_statics()` bakes every eligible static
+    MeshInstance3D into one ArrayMesh per (geometry, material, shadow)
+    group — **2,317 instances → 152 merged draws** per build log
+    `[PERF]`. Collision (separate StaticBody3D) untouched; Phase 5 LOD
+    props (visibility-ranged) and shadow-off nodes excluded.
+  - **NPC rig LOD**: per-mesh `visibility_range_end` on character rigs
+    (mains/teachers 130 m, staff 110 m, background 80 m) — distant
+    characters cost zero draws. Name labels still render (identity).
+  - **Shadow camera**: sun `directional_shadow_max_distance` 300 → 180 m.
+  - **Quality profiles that actually work** (Settings → Graphics
+    quality): High = shadows 180 m + SDFGI/bloom (Forward+) + MSAA 2×;
+    Medium = shadows 110 m, no SDFGI/bloom/MSAA; Low = sun shadows OFF
+    (removes the whole shadow pass). Persisted in campus_settings.cfg.
+  - Far-NPC simulation tiers from Phase 4 unchanged (already distance-
+    based); the creation-screen sim gate (item 4) also removes the
+    startup-sim cost the user felt as menu lag.
+- Honest partials: draw calls are renderer-independent counts, so the
+  −57.8% carries to the Windows Forward+ build, but no FPS figure on a
+  real GPU was measurable in this VM (llvmpipe only) — FPS should
+  improve roughly in line with the draw/shadow cuts, not guaranteed
+  proportionally. Merged geometry is no longer per-piece frustum
+  culled, so primitive count rose slightly (824k → 866k at the probe
+  viewpoint) while draw calls fell by 6,106 — the right trade for this
+  scene. The minimap still renders a second top-down view (unchanged).
+
+### Item 2 — FOOTSTEP SOUND ✅
+- Footsteps now default **OFF**. The walk loop only plays when the
+  player enables "Footstep sounds (off by default)" in Settings, and
+  then at −16 dB (was full volume every ~2.4 m). The gate is also
+  inside `_p5_sfx` itself. UI click / phone buzz / bell unchanged.
+  Test asserts the default is off (`[TEST_FIX]`).
+
+### Item 3 — SIGN GRAPHICS ✅
+- `World._sign()` rewritten as professional signboards: an opaque navy
+  board mesh sized to the measured text sits behind every standalone
+  sign (26 boarded signs built; test asserts count > 0), Label3D is
+  single-sided (`double_sided=false`) on the front face only, pixel
+  size 0.0042 (readable at street distance, never screen-filling),
+  dark outline for contrast. Freestanding signs (parking, bus stops,
+  park, sports) stand on two metal posts. Signs mounted on existing
+  panels (building name plates, notice boards, signposts) keep their
+  panels and are now single-sided too. **No mirrored text is visible
+  from any angle** — evidence: `preview/shot24_sign_front.png`
+  (crisp "PARKING — Students & Staff" on its board) and
+  `preview/shot25_sign_back.png` (the same sign from behind: plain
+  board back on posts, zero text).
+- HUD restyle: the top-left stats panel is now a rounded-corner,
+  evenly padded dark panel with a subtle border and tidy % bars; the
+  creation and settings panels share the same opaque professional
+  style (the project's default panel style was translucent).
+
+### Item 4 — CREATION SCREEN (lag + vanishing cursor) ✅
+- **Mouse**: gameplay click-to-capture now requires NO overlay open
+  (`_any_overlay_open()`: creation, dialogue, phone, save, shop, QA,
+  classmates, settings). Opening an overlay while captured force-
+  releases the mouse; creation explicitly sets the mouse VISIBLE.
+- **Lag**: while the creation panel is open, `_set_creation_open(true)`
+  puts every NPC into `sim_paused` (no pathfinding/movement/schedules)
+  and `Main._process` early-returns after sun/HUD refresh — the world
+  renders only as a backdrop; the clock does not advance. Confirming
+  creation unpauses everything. Verified by code path + headless test
+  (`[TEST_FIX]` asserts every main NPC is sim_paused inside the gate
+  and released after it). Note: the OS cursor itself cannot appear in
+  Godot screenshots; `preview/shot23_creation.png` shows the panel in
+  its usable state.
+
+### Item 5 — CHOOSE YOUR MAIN CHARACTER ✅
+- Creation panel now has a **"Choose your main character"** grid of 8
+  named appearance presets spanning both Blender rigs, skin tones,
+  hairstyles and outfit colours: Aarav — Campus Classic, Meera —
+  Maroon Kurti, Kabir — Spiky Green, Ananya — Bob & Pink, Rohan —
+  Curly Yellow, Ishita — Braided Teal, Arjun — Cap & Grey, Sana —
+  Wavy Rust. Tapping one marks it (✔ + blue highlight + "Selected:"
+  line) and live-previews it on the player model behind the panel.
+  The choice applies at semester start and persists through the
+  existing save system (`appearance` in the save state; re-applied on
+  load). Presets are looks, not identities — none is one of the Ten.
+- Test evidence: `[TEST_FIX]` chooses preset 5, verifies the player
+  config matches the preset, saves to a real slot, reloads, and
+  verifies the preset survived the round-trip.
+
+### Item 6 — MOBILE: a SEPARATE build of this ONE project ✅ (APK shipped)
+Per the user's binding clarification: one Godot project / one repo /
+one codebase; "separate" = separate BUILDs with separate presets,
+renderer/quality profiles and output files. The PC build carries no
+mobile UI behaviour at all.
+
+| | **PC version** | **Mobile version** |
+|---|---|---|
+| File | `build/windows/CampusDays.exe` (+ .pck) | `build/android/CampusDays.apk` |
+| Preset | "Windows Desktop" | "Android" (`custom_features="mobile"`) |
+| Renderer | Forward+ | GL Compatibility |
+| Touch layer | **never built** (code-gated on the mobile feature tag) | built, visible from start |
+| Default quality | High | Low (until the player saves their own) |
+| Default text size | 20 | 22 |
+| Controls | WASD + mouse, gamepad | joystick + look-drag + tap |
+
+- Touch controls: left-half virtual joystick, right-half drag to
+  look, and ≥64 px on-screen buttons — Interact, Phone, Mates
+  (Classmates), Run (hold), Pause. All touch *input handling* in
+  `_input` is gated on the mobile build flag, and the touch UI is
+  only constructed when `OS.has_feature("mobile")` / Android /
+  `--touch-test`. Desktop test evidence: `[TEST_TOUCH]
+  mobile_build=false touch_ui=false`; forced-mobile evidence:
+  `[TEST_TOUCH] mobile_build=true touch_buttons=5`. Menus, creation
+  (incl. the preset grid), dialogue and phone are standard Godot
+  controls — fully tappable; mobile default text is larger.
+- Android rendering settings: GL Compatibility (project renderer),
+  arm64-v8a only, target SDK 34, Low quality default (sun shadows off
+  until changed), draw calls at the item-1 reduced level.
+- **APK: REAL and signed.** Toolchain installed from official sources
+  only: Temurin JDK 17.0.21 (Adoptium), Android SDK components
+  (platform-tools, platforms;android-34, build-tools;34.0.0) from
+  dl.google.com (sdkmanager itself could not tunnel through this
+  VM's egress proxy, so the component zips were fetched directly —
+  same official origin), debug keystore generated with keytool.
+  `build/android/CampusDays.apk` = **40,449,438 bytes**, verified with
+  `apksigner verify` (Signer: CN=Android Debug). Two real blockers
+  were found and fixed on the way: apksigner needs `java` on PATH
+  (else Godot silently emits an unsigned APK — now handled in
+  `tools/export_dual.sh`), and release signing needs the keystore in
+  the preset's `keystore/*` options (now set).
+- Honest partials: the APK was **not installed on a physical phone**
+  in this round (no device in the VM) — touch play is verified by
+  construction + the forced-mobile test mode, not on hardware. The
+  keystore is a DEBUG keystore: fine for sideloading/testing, not for
+  Play Store publishing.
+
+### Verification (this round)
+- Headless suite: exit 0, **zero script errors**, 43/43 NPC arrivals,
+  `[TEST_FIX] PASS`, `[TEST_P2] PASS`, `[TEST_P3] PASS`,
+  `[TEST_P4] Phase 4 result: PASS`, `[TEST_P5] PASS`, semester
+  harness PASS (Day 86, GPA 8.09). Same suite also PASS under
+  `--touch-test`.
+- Captures (xvfb, 0 script errors): shot23_creation.png,
+  shot24_sign_front.png, shot25_sign_back.png are new; all earlier
+  shots re-captured with no visual regressions (shot6 avenue checked).
+- Exports refreshed from final code via `tools/export_dual.sh`
+  (now documents all THREE exports): Windows exe 84,214,784 B + pck
+  17,793,648 B (Forward+), Web wasm 35,376,909 B + pck 17,793,712 B
+  (Compatibility), Android apk 40,449,438 B (Compatibility, signed);
+  RENDERER.txt correct in each folder; project.godot restored to
+  gl_compatibility afterwards.

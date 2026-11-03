@@ -39,6 +39,10 @@ var seated: bool = false
 # straight-line stepping to the spot, idle clip, no pathfinding).
 # Main forces tier 0 in test/capture mode so arrival evidence stays valid.
 var sim_tier: int = 0
+# Fix round: while the character-creation panel is open, Main sets
+# this on every NPC — no pathfinding, no movement, no schedule sim
+# runs behind the panel (the world renders only as a backdrop).
+var sim_paused: bool = false
 var _move_speed: float = 1.45
 # Capture-only: when true, _process skips movement and animation updates so
 # a frozen mid-stride pose set by the screenshot tour is not overridden by
@@ -84,6 +88,12 @@ func setup(p_data: Dictionary, p_is_main: bool, start_pos: Vector3, p_speed: flo
 	spot = start_pos
 	_model = CharModel.build(data)
 	add_child(_model["root"])
+	# Fix round (item 1): per-mesh visibility ranges on the rig — the
+	# engine culls a character's ~30 mesh draws once it is beyond
+	# reading distance (mains/teachers get a longer range than
+	# background students). Camera-relative, so it is correct for any
+	# camera, and inert under the headless dummy renderer.
+	set_rig_lod(130.0 if p_is_main else 80.0)
 	_anim = _model.get("anim")
 	_play("idle", 1.0)
 	# Name label
@@ -110,6 +120,20 @@ func setup(p_data: Dictionary, p_is_main: bool, start_pos: Vector3, p_speed: flo
 	_bubble.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_bubble.width = 900.0
 	add_child(_bubble)
+
+func set_rig_lod(range_end: float) -> void:
+	# Fix round (item 1): apply a camera-distance cull range to every
+	# mesh in this character's rig. Main re-applies a longer range for
+	# teachers/staff after their flags are set (setup runs before).
+	if _model.is_empty():
+		return
+	var mstack: Array = [_model["root"]]
+	while not mstack.is_empty():
+		var mn: Node = mstack.pop_back()
+		if mn is MeshInstance3D:
+			(mn as MeshInstance3D).visibility_range_end = range_end
+		for mc in mn.get_children():
+			mstack.append(mc)
 
 func set_path(points: Array) -> void:
 	path = points.duplicate()
@@ -178,6 +202,9 @@ func _process(delta: float) -> void:
 		if _bubble_timer <= 0.0:
 			_bubble.visible = false
 	_moving = false
+	if sim_paused:
+		_update_anim() # idle pose only; no movement or pathfinding
+		return
 	if anim_frozen:
 		return
 	if talking or stationary:
